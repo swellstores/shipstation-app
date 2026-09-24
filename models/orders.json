@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json.swell.store/model.json",
+  "collection": "orders",
+  "description": "ShipStation sync state recorded on each order",
+  "fields": {
+    "sync_status": {
+      "type": "string",
+      "label": "ShipStation sync status",
+      "enum": ["pending", "synced", "error", "skipped", "canceled"],
+      "private": true,
+      "description": "pending: queued or awaiting a manual push. synced: accepted by ShipStation. error: last push failed, see last_error. skipped: ShipStation has already shipped or cancelled the order, so it can no longer be updated. canceled: cancellation was pushed."
+    },
+    "order_key": {
+      "type": "string",
+      "private": true,
+      "description": "Value sent to ShipStation as orderKey. Always the Swell order id, which is what makes repeated pushes idempotent."
+    },
+    "shipstation_order_id": {
+      "type": "int",
+      "private": true,
+      "description": "ShipStation's internal orderId, returned on the first successful push."
+    },
+    "shipstation_order_number": {
+      "type": "string",
+      "private": true,
+      "description": "Order number as it appears in ShipStation, including the configured prefix."
+    },
+    "last_synced_at": {
+      "type": "date",
+      "private": true,
+      "description": "When the order was last accepted by ShipStation."
+    },
+    "last_error": {
+      "type": "string",
+      "private": true,
+      "description": "Message from the most recent failed push or webhook. Cleared on the next success."
+    },
+    "last_webhook_at": {
+      "type": "date",
+      "private": true,
+      "description": "When a ShipStation shipment notification was last processed for this order."
+    },
+    "shipments_count": {
+      "type": "int",
+      "default": 0,
+      "private": true,
+      "description": "Number of ShipStation shipments turned into Swell shipment records."
+    },
+    "resync_requested": {
+      "type": "bool",
+      "default": false,
+      "private": true,
+      "description": "Set from the dashboard to force a re-push on save. Cleared automatically once the push completes."
+    }
+  }
+}

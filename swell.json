@@ -1,0 +1,8 @@
+{
+  "description": "Two-way order and shipment sync with ShipStation",
+  "id": "shipstation",
+  "name": "ShipStation",
+  "type": "integration",
+  "version": "1.0.0",
+  "permissions": []
+}

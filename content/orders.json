@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json.swell.store/content.json",
+  "collection": "orders",
+  "description": "ShipStation sync status on the order editor",
+  "fields": [
+    {
+      "id": "sync_status",
+      "label": "Sync status",
+      "type": "select",
+      "options": [
+        { "value": "pending", "label": "Pending" },
+        { "value": "synced", "label": "Synced" },
+        { "value": "error", "label": "Error" },
+        { "value": "skipped", "label": "Skipped (already shipped)" },
+        { "value": "canceled", "label": "Canceled" }
+      ]
+    },
+    {
+      "id": "shipstation_order_number",
+      "label": "ShipStation order number",
+      "type": "text"
+    },
+    {
+      "id": "shipstation_order_id",
+      "label": "ShipStation order ID",
+      "type": "integer"
+    },
+    {
+      "id": "last_synced_at",
+      "label": "Last synced",
+      "type": "datetime"
+    },
+    {
+      "id": "last_webhook_at",
+      "label": "Last shipment received",
+      "type": "datetime"
+    },
+    {
+      "id": "shipments_count",
+      "label": "Shipments received",
+      "type": "integer"
+    },
+    {
+      "id": "last_error",
+      "label": "Last error",
+      "type": "textarea"
+    },
+    {
+      "id": "order_key",
+      "label": "Order key",
+      "type": "text",
+      "description": "Identifier ShipStation uses to match this order."
+    },
+    {
+      "id": "resync_requested",
+      "label": "Re-sync on save",
+      "type": "toggle",
+      "description": "Turn on and save to push this order to ShipStation again. Switches itself off once the push finishes."
+    }
+  ],
+  "views": [
+    {
+      "id": "edit",
+      "tabs": [
+        {
+          "id": "shipstation",
+          "label": "ShipStation",
+          "fields": [
+            { "id": "sync_status", "readonly": true, "admin_span": 2 },
+            { "id": "last_synced_at", "readonly": true, "admin_span": 2 },
+            { "id": "shipstation_order_number", "readonly": true, "admin_span": 2 },
+            { "id": "shipstation_order_id", "readonly": true, "admin_span": 2 },
+            { "id": "shipments_count", "readonly": true, "admin_span": 2 },
+            { "id": "last_webhook_at", "readonly": true, "admin_span": 2 },
+            {
+              "id": "last_error",
+              "readonly": true,
+              "conditions": { "last_error": { "$exists": true } }
+            },
+            {
+              "id": "resync_requested",
+              "conditions": { "$settings.shipstation.enabled": true }
+            },
+            { "id": "order_key", "readonly": true }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "list",
+      "fields": [{ "id": "sync_status", "label": "ShipStation" }],
+      "tabs": [
+        {
+          "id": "shipstation_errors",
+          "label": "ShipStation errors",
+          "query": { "where": { "sync_status": "error" } }
+        }
+      ]
+    }
+  ]
+}

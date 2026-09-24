@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json.swell.store/setting.json",
+  "label": "ShipStation",
+  "description": "Two-way order and shipment sync with ShipStation. Disable the native ShipStation integration before enabling this app, otherwise every order is pushed twice.",
+  "fields": [
+    {
+      "id": "enabled",
+      "label": "Enable ShipStation sync",
+      "type": "toggle",
+      "default": false,
+      "description": "Master switch. While off, no orders are pushed and incoming shipment webhooks are rejected."
+    },
+    {
+      "type": "field_group",
+      "label": "Credentials",
+      "fields": [
+        {
+          "id": "api_key",
+          "label": "API key",
+          "type": "text",
+          "required": true,
+          "description": "Found in ShipStation under Settings → Account → API Settings."
+        },
+        {
+          "id": "api_secret",
+          "label": "API secret",
+          "type": "text",
+          "required": true,
+          "description": "Issued alongside the API key. Regenerating the key in ShipStation invalidates both."
+        },
+        {
+          "id": "store_id",
+          "label": "ShipStation store ID",
+          "type": "text",
+          "description": "Optional. Assigns pushed orders to a specific ShipStation store and scopes webhooks to it. Leave empty to use the default store."
+        }
+      ]
+    },
+    {
+      "type": "field_group",
+      "label": "Order sync",
+      "fields": [
+        {
+          "id": "push_trigger",
+          "label": "Push orders to ShipStation",
+          "type": "select",
+          "default": "paid",
+          "description": "When an order should first appear in ShipStation.",
+          "options": [
+            { "value": "paid", "label": "When the order is paid" },
+            { "value": "submitted", "label": "When the order is submitted" },
+            { "value": "manual", "label": "Only when re-synced manually" }
+          ]
+        },
+        {
+          "id": "order_prefix",
+          "label": "Order number prefix",
+          "type": "text",
+          "description": "Optional. Prepended to the Swell order number in ShipStation, for example \"SW-\". Useful when several channels feed one ShipStation account."
+        },
+        {
+          "id": "sync_existing",
+          "label": "Send existing orders",
+          "type": "toggle",
+          "default": true,
+          "description": "After setup, send orders that are already paid and waiting to ship, a few every five minutes until none are left. Matches the native integration's first sync."
+        },
+        {
+          "id": "sync_updates",
+          "label": "Sync order edits",
+          "type": "toggle",
+          "default": true,
+          "description": "Re-push an order when its shipping address or line items change. ShipStation rejects edits to orders it has already shipped or cancelled."
+        },
+        {
+          "id": "sync_cancels",
+          "label": "Sync cancellations",
+          "type": "toggle",
+          "default": true,
+          "description": "Mark the order cancelled in ShipStation when it is canceled in Swell."
+        }
+      ]
+    },
+    {
+      "type": "field_group",
+      "label": "Shipment sync",
+      "fields": [
+        {
+          "id": "webhook_secret",
+          "label": "Webhook secret",
+          "type": "text",
+          "required": true,
+          "description": "Any random string of 16 characters or more. ShipStation does not sign its webhooks, so this value is added to the callback URL and checked on every delivery. Run the setup function again after changing it."
+        },
+        {
+          "id": "callback_url",
+          "label": "Callback URL override",
+          "type": "text",
+          "description": "Optional. The public URL ShipStation should post shipment notifications to. Leave empty to derive it automatically; set it only if the setup function reports the wrong URL."
+        },
+        {
+          "id": "create_shipments",
+          "label": "Create shipments from ShipStation",
+          "type": "toggle",
+          "default": true,
+          "description": "Turn ShipStation shipment notifications into Swell shipment records with tracking. Partial shipments are supported: the order stays unfulfilled until every item has shipped."
+        },
+        {
+          "id": "allow_test_payload",
+          "label": "Accept test webhook payloads",
+          "type": "toggle",
+          "default": false,
+          "description": "Development aid. Lets the webhook function read shipments straight from the request body instead of fetching them from ShipStation. Keep this off in production."
+        }
+      ]
+    }
+  ]
+}

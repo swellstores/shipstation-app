@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json.swell.store/model.json",
+  "collection": "shipments",
+  "description": "Links Swell shipments back to the ShipStation shipment they came from",
+  "fields": {
+    "shipment_id": {
+      "type": "int",
+      "private": true,
+      "description": "ShipStation shipmentId. Used to recognise repeated webhook deliveries so the same shipment is never recorded twice."
+    },
+    "batch_number": {
+      "type": "string",
+      "private": true,
+      "description": "ShipStation batch number, when the label was bought as part of a batch."
+    },
+    "voided": {
+      "type": "bool",
+      "private": true,
+      "description": "Set when ShipStation reports the label as voided. The Swell shipment is canceled at the same time."
+    }
+  }
+}
