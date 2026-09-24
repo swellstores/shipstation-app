@@ -8,7 +8,7 @@
       "label": "Enable ShipStation sync",
       "type": "toggle",
       "default": false,
-      "description": "Master switch. While off, no orders are pushed and incoming shipment webhooks are rejected."
+      "description": "Master switch. While off, no orders are sent, shipment notifications from ShipStation are acknowledged and ignored, and the daily check removes the ShipStation webhooks."
     },
     {
       "type": "field_group",
@@ -90,7 +90,7 @@
           "label": "Webhook secret",
           "type": "text",
           "required": true,
-          "description": "Any random string of 16 characters or more. ShipStation does not sign its webhooks, so this value is added to the callback URL and checked on every delivery. Run the setup function again after changing it."
+          "description": "Any random string of 16 characters or more. It is added to the callback URL and required for test payloads. Swell does not currently pass it through on ShipStation's notifications, so the app instead verifies every shipment by fetching it from ShipStation with your API credentials. Run the setup function again after changing it."
         },
         {
           "id": "callback_url",
