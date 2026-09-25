@@ -1,8 +1,63 @@
 {
-  "description": "Two-way order and shipment sync with ShipStation",
+  "description": "Send orders to ShipStation and get tracking back automatically",
   "id": "shipstation",
   "name": "ShipStation",
   "type": "integration",
   "version": "1.0.0",
-  "permissions": []
+  "permissions": [],
+  "support_email": "support@swell.is",
+  "repository_url": "https://github.com/swellstores/shipstation-app",
+  "highlights": [
+    {
+      "id": "orders",
+      "title": "Orders appear in ShipStation",
+      "description": "Paid orders are sent automatically with items, options, weights and addresses, ready to pick, pack and buy labels."
+    },
+    {
+      "id": "tracking",
+      "title": "Tracking flows back to Swell",
+      "description": "Every label bought in ShipStation becomes a Swell shipment with the carrier, tracking number and exact items shipped."
+    },
+    {
+      "id": "partial",
+      "title": "Partial shipments, handled",
+      "description": "Ship an order in parts. Each label is its own shipment, and the order completes when the last item ships."
+    },
+    {
+      "id": "edits",
+      "title": "Edits and cancellations follow",
+      "description": "Change an address or cancel an order in Swell and ShipStation is updated. Voided labels cancel the Swell shipment."
+    },
+    {
+      "id": "status",
+      "title": "Sync status on every order",
+      "description": "A ShipStation tab on each order shows its status and any error, with an errors view to find and re-send failures."
+    }
+  ],
+  "images": [
+    {
+      "id": "cover",
+      "image_src": "assets/screenshots/01-cover.png",
+      "title": "ShipStation for Swell",
+      "description": "Orders go to ShipStation when they're paid. Labels you buy there come back to Swell as shipments with tracking."
+    },
+    {
+      "id": "flow",
+      "image_src": "assets/screenshots/02-how-it-works.png",
+      "title": "From paid order to tracking",
+      "description": "Paid orders reach ShipStation on their own, and each label bought there becomes a Swell shipment, partial ones included."
+    },
+    {
+      "id": "settings",
+      "image_src": "assets/screenshots/03-settings.png",
+      "title": "Choose when orders are sent",
+      "description": "Send orders when paid, when submitted or only on request, add an order number prefix, and pick what else to sync."
+    },
+    {
+      "id": "compare",
+      "image_src": "assets/screenshots/04-compare.png",
+      "title": "More than the built-in integration",
+      "description": "Everything Swell's built-in ShipStation integration does, plus edits, cancellations, voided labels and sync status."
+    }
+  ]
 }
