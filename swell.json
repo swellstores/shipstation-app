@@ -6,6 +6,8 @@
   "version": "1.0.0",
   "permissions": [],
   "support_email": "support@swell.is",
+  "documentation_url": "https://developers.swell.is/app-guides/shipstation",
+  "price_external": true,
   "repository_url": "https://github.com/swellstores/shipstation-app",
   "highlights": [
     {
@@ -16,7 +18,7 @@
     {
       "id": "tracking",
       "title": "Tracking flows back to Swell",
-      "description": "Every label bought in ShipStation becomes a Swell shipment with the carrier, tracking number and exact items shipped."
+      "description": "Labels bought in ShipStation become shipments in your live Swell store, with the carrier, tracking number and items."
     },
     {
       "id": "partial",
@@ -26,7 +28,7 @@
     {
       "id": "edits",
       "title": "Edits and cancellations follow",
-      "description": "Change an address or cancel an order in Swell and ShipStation is updated. Voided labels cancel the Swell shipment."
+      "description": "Change an address or items, or cancel an order in Swell, and ShipStation is updated while the order is still open there."
     },
     {
       "id": "status",
@@ -51,13 +53,13 @@
       "id": "settings",
       "image_src": "assets/screenshots/03-settings.png",
       "title": "Choose when orders are sent",
-      "description": "Send orders when paid, when submitted or only on request, add an order number prefix, and pick what else to sync."
+      "description": "Send orders when they're paid or submitted, add an order number prefix, and pick what else to sync."
     },
     {
       "id": "compare",
       "image_src": "assets/screenshots/04-compare.png",
       "title": "More than the built-in integration",
-      "description": "Everything Swell's built-in ShipStation integration does, plus edits, cancellations, voided labels and sync status."
+      "description": "Everything Swell's built-in ShipStation integration does, plus edits, cancellations, order number prefixes and sync status."
     }
   ]
 }

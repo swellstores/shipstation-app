@@ -24,7 +24,7 @@
         {
           "id": "api_secret",
           "label": "API secret",
-          "type": "text",
+          "type": "secret",
           "required": true,
           "description": "Issued alongside the API key. Regenerating the key in ShipStation invalidates both."
         },
@@ -88,7 +88,7 @@
         {
           "id": "webhook_secret",
           "label": "Webhook secret",
-          "type": "text",
+          "type": "secret",
           "required": true,
           "description": "Any random string of 16 characters or more. It is added to the callback URL and required for test payloads. Swell does not currently pass it through on ShipStation's notifications, so the app instead verifies every shipment by fetching it from ShipStation with your API credentials. Run the setup function again after changing it."
         },
