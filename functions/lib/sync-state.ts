@@ -13,6 +13,8 @@ export interface SyncState {
   last_webhook_at?: string | null;
   shipments_count?: number | null;
   resync_requested?: boolean | null;
+  /** Digest of the last payload sent (or found already shipped); see `payloadHash`. */
+  payload_hash?: string | null;
 }
 
 const MAX_ERROR_LENGTH = 500;

@@ -46,6 +46,11 @@
       "private": true,
       "description": "Number of ShipStation shipments turned into Swell shipment records."
     },
+    "payload_hash": {
+      "type": "string",
+      "private": true,
+      "description": "Digest of the order as last sent to ShipStation. An order update that would send exactly the same thing is skipped, which is what stops the app re-sending an order after every shipment it records."
+    },
     "resync_requested": {
       "type": "bool",
       "default": false,

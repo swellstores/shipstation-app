@@ -5,6 +5,7 @@ import {
   PROBE_TIMEOUT_MS,
   ShipStationClient,
   ShipStationError,
+  ShipStationOrder,
   ShipStationOrderStatus,
   errorText,
 } from './shipstation';
@@ -16,6 +17,7 @@ export type PushAction =
   | 'skipped_never_pushed'
   | 'skipped_already_shipped'
   | 'skipped_no_items'
+  | 'skipped_unchanged'
   | 'error';
 
 export interface PushResult {
@@ -35,6 +37,11 @@ export interface PushOptions {
   guardShipped?: boolean;
   statusOverride?: ShipStationOrderStatus;
   successStatus?: SyncStatus;
+  /**
+   * Skip the push when the payload is identical to the last one sent. For pushes caused
+   * by incidental order updates, never for an explicit re-sync.
+   */
+  skipIfUnchanged?: boolean;
 }
 
 const ORDER_EXPAND = ['account', 'items.product', 'items.variant'];
@@ -133,26 +140,6 @@ export async function pushOrder(
   const client = new ShipStationClient(settings.api_key, settings.api_secret);
   const orderKey = orderKeyFor(swellEnvironment(req), String(order.id));
 
-  if (options.guardShipped) {
-    const status = await remoteStatus(client, state, orderKey);
-    if (status && SHIPSTATION_FINAL_STATUSES.includes(status)) {
-      const alreadyCancelled = status === 'cancelled' && options.statusOverride === 'cancelled';
-      await recordSyncState(req, orderId, {
-        sync_status: alreadyCancelled ? 'canceled' : 'skipped',
-        last_error: alreadyCancelled
-          ? null
-          : `ShipStation has already marked this order "${status}" and no longer accepts changes to it.`,
-        resync_requested: false,
-      });
-      return {
-        orderId,
-        ok: true,
-        action: alreadyCancelled ? 'pushed' : 'skipped_already_shipped',
-        message: `ShipStation order status is "${status}".`,
-      };
-    }
-  }
-
   // Only worth a round trip when some item actually carries a weight; the unit is
   // meaningless otherwise and the call competes for the function's time budget.
   const needsWeightUnit = shippableItems(order).some((item) => Number(item.shipment_weight) > 0);
@@ -191,6 +178,41 @@ export async function pushOrder(
     };
   }
 
+  // Nothing ShipStation would see has changed since the last push (for example, the
+  // order.updated that recording a shipment fires, which rewrites the items' delivered
+  // quantities). Return without a call and without a write, so nothing re-triggers.
+  const hash = await payloadHash(payload);
+  if (options.skipIfUnchanged && state.payload_hash === hash) {
+    return {
+      orderId,
+      ok: true,
+      action: 'skipped_unchanged',
+      message: 'Nothing ShipStation shows for this order has changed.',
+    };
+  }
+
+  if (options.guardShipped) {
+    const status = await remoteStatus(client, state, orderKey);
+    if (status && SHIPSTATION_FINAL_STATUSES.includes(status)) {
+      const alreadyCancelled = status === 'cancelled' && options.statusOverride === 'cancelled';
+      await recordSyncState(req, orderId, {
+        sync_status: alreadyCancelled ? 'canceled' : 'skipped',
+        last_error: alreadyCancelled
+          ? null
+          : `ShipStation has already marked this order "${status}" and no longer accepts changes to it.`,
+        resync_requested: false,
+        // Remembered so the same unchanged order is not probed again on the next update.
+        payload_hash: hash,
+      });
+      return {
+        orderId,
+        ok: true,
+        action: alreadyCancelled ? 'pushed' : 'skipped_already_shipped',
+        message: `ShipStation order status is "${status}".`,
+      };
+    }
+  }
+
   try {
     const result = await client.createOrder(payload);
     const shipstationOrderId = Number(result?.orderId);
@@ -204,6 +226,7 @@ export async function pushOrder(
       last_synced_at: new Date().toISOString(),
       last_error: null,
       resync_requested: false,
+      payload_hash: hash,
     });
     console.log(
       `ShipStation: pushed order ${payload.orderNumber} as "${payload.orderStatus}" (${payload.items.length} item(s))`,
@@ -225,6 +248,16 @@ export async function pushOrder(
     console.error(`ShipStation: push failed for order ${payload.orderNumber}: ${message}`);
     return { orderId, ok: false, action: 'error', message, retryable };
   }
+}
+
+/**
+ * A short digest of everything sent to ShipStation for an order. Two pushes with the same
+ * digest would leave ShipStation exactly as it was.
+ */
+export async function payloadHash(payload: ShipStationOrder): Promise<string> {
+  const bytes = new TextEncoder().encode(JSON.stringify(payload));
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
+  return [...digest.slice(0, 12)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
 /**

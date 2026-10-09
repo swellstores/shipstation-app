@@ -13,6 +13,16 @@ export const config: SwellConfig = {
   },
 };
 
+/** Edits the "Sync order edits" setting covers. */
+const EDIT_FIELDS = ['shipping', 'billing', 'items'];
+
+/**
+ * Changes to what ShipStation shows as the order's status (awaiting payment, on hold,
+ * awaiting shipment). Always sent, whatever "Sync order edits" says: an order paid after
+ * it was sent would otherwise stay Awaiting Payment in ShipStation.
+ */
+const STATUS_FIELDS = ['paid', 'hold'];
+
 export default async function (req: SwellRequest) {
   const settings = await getSettings(req);
   if (!settings.enabled) {
@@ -21,16 +31,12 @@ export default async function (req: SwellRequest) {
 
   const changed = req.data.$event?.data ?? {};
   const resyncRequested = changed.$app?.[appId(req)]?.resync_requested === true;
-  const addressChanged = 'shipping' in changed;
-  const itemsChanged = 'items' in changed;
+  const statusChanged = STATUS_FIELDS.some((field) => field in changed);
+  const edited = EDIT_FIELDS.some((field) => field in changed);
 
-  // This guard is what keeps the app from reacting to its own writes. Sync state is only
-  // ever written under $app.<app_id>.*, never to shipping or items, and clearing the
-  // re-sync flag sets it to false — so none of those writes get past here.
-  if (!resyncRequested && !addressChanged && !itemsChanged) {
-    return;
-  }
-  if (!resyncRequested && !settings.sync_updates) {
+  // Sync state is only ever written under $app.<app_id>.*, and clearing the re-sync flag
+  // sets it to false, so the app's own order writes stop here.
+  if (!resyncRequested && !statusChanged && !(edited && settings.sync_updates)) {
     return;
   }
 
@@ -41,6 +47,11 @@ export default async function (req: SwellRequest) {
       // never seen.
       requireExisting: !resyncRequested,
       guardShipped: true,
+      // Recording a shipment rewrites the order's items (their delivered quantities), so
+      // every label this app records fires order.updated with `items` changed. Nothing
+      // ShipStation sees has changed, and the push is skipped without a write. The same
+      // goes for any other update that leaves the ShipStation order as it was.
+      skipIfUnchanged: !resyncRequested,
     }),
   );
 }

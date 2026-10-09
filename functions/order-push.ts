@@ -17,14 +17,24 @@ export default async function (req: SwellRequest) {
     return;
   }
 
+  const eventType = req.data.$event?.type;
+
   // Both events are subscribed so the merchant can change the trigger without a redeploy;
   // the handler decides which one actually pushes.
-  if (settings.push_trigger === 'manual') {
-    return;
-  }
-  if (req.data.$event?.type !== `order.${settings.push_trigger}`) {
+  if (eventType === `order.${settings.push_trigger}`) {
+    throwIfFailed(await pushOrder(req, settings, req.data.id));
     return;
   }
 
-  throwIfFailed(await pushOrder(req, settings, req.data.id));
+  // Sent earlier, while unpaid (trigger "submitted", or a manual push): ShipStation still
+  // shows it as Awaiting Payment, so send the new status. Never creates an order.
+  if (eventType === 'order.paid') {
+    throwIfFailed(
+      await pushOrder(req, settings, req.data.id, {
+        requireExisting: true,
+        guardShipped: true,
+        skipIfUnchanged: true,
+      }),
+    );
+  }
 }

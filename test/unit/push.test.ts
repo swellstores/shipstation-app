@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import orderPush from '../../functions/order-push';
 import orderCancel from '../../functions/order-cancel';
+import orderUpdate from '../../functions/order-update';
 import { pushOrder } from '../../functions/lib/push';
 import { ShipStationSettings } from '../../functions/lib/settings';
 import { createMockRequest } from '../helpers/mock-request';
@@ -271,5 +272,146 @@ describe('order-cancel', () => {
     expect(createCall[0]).toContain('/orders/createorder');
     expect(JSON.parse(createCall[1].body as string).orderStatus).toBe('cancelled');
     expect(swell.put.mock.calls[0][1].$app.shipstation.sync_status).toBe('canceled');
+  });
+});
+
+describe('order-update', () => {
+  /** An order already pushed, with the digest a real push recorded for it. */
+  async function pushedOrder(record = order()) {
+    vi.stubGlobal('fetch', vi.fn(async () => shipStationResponse(200, { orderId: 10 })));
+    const swell = swellStub(record);
+    await pushOrder(createMockRequest({ swell }), settings(), record.id);
+    record.$app = { shipstation: swell.put.mock.calls[0][1].$app.shipstation };
+    vi.unstubAllGlobals();
+    return record;
+  }
+
+  function updateRequest(
+    record: Record<string, any>,
+    changed: Record<string, any>,
+    overrides: Partial<ShipStationSettings> = {},
+  ) {
+    const fetchMock = vi.fn(async (url: string, _init?: RequestInit) =>
+      String(url).includes('/orders/createorder')
+        ? shipStationResponse(200, { orderId: 10 })
+        : shipStationResponse(200, { orderId: 10, orderStatus: 'awaiting_shipment' }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const swell = swellStub(record);
+    swell.settings = vi.fn(async () => appSettings(overrides));
+    const req = createMockRequest({
+      swell,
+      data: { id: record.id, $event: { type: 'order.updated', data: changed } },
+    });
+    const created = () =>
+      fetchMock.mock.calls
+        .filter(([url]) => String(url).includes('/orders/createorder'))
+        .map(([, init]) => JSON.parse(String(init?.body)));
+    return { req, fetchMock, swell, created };
+  }
+
+  it('ignores the items write that recording a shipment causes', async () => {
+    // Creating a shipment makes the platform rewrite the order's items with their new
+    // delivered quantities (schema-api-server orders/items.js), which fires order.updated
+    // with `items` changed. ShipStation's copy of the order is unaffected.
+    const record = await pushedOrder();
+    record.items[0].quantity_delivered = 2;
+    record.items[0].quantity_deliverable = 0;
+    const { req, fetchMock, swell } = updateRequest(record, { items: [{ id: 'item_1' }] });
+
+    await orderUpdate(req);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(swell.put).not.toHaveBeenCalled();
+  });
+
+  it('still sends an item edit that changes the order', async () => {
+    const record = await pushedOrder();
+    record.items[0].quantity_total = 3;
+    const { req, created } = updateRequest(record, { items: [{ id: 'item_1' }] });
+
+    await orderUpdate(req);
+
+    expect(created()[0].items[0].quantity).toBe(3);
+  });
+
+  it('sends a payment to ShipStation even with order edits switched off', async () => {
+    const record = await pushedOrder(order({ paid: false }));
+    record.paid = true;
+    const { req, created } = updateRequest(record, { paid: true }, { sync_updates: false });
+
+    await orderUpdate(req);
+
+    expect(created()[0].orderStatus).toBe('awaiting_shipment');
+  });
+
+  it('sends a hold and its release', async () => {
+    const record = await pushedOrder();
+    record.hold = true;
+    const { req, created } = updateRequest(record, { hold: true });
+
+    await orderUpdate(req);
+
+    expect(created()[0].orderStatus).toBe('on_hold');
+  });
+
+  it('leaves address edits alone when order edits are switched off', async () => {
+    const record = await pushedOrder();
+    record.shipping.address1 = '1 New Street';
+    const { req, fetchMock } = updateRequest(record, { shipping: {} }, { sync_updates: false });
+
+    await orderUpdate(req);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('re-sends on request even when nothing changed', async () => {
+    const record = await pushedOrder();
+    const { req, created } = updateRequest(record, {
+      $app: { shipstation: { resync_requested: true } },
+    });
+
+    await orderUpdate(req);
+
+    expect(created()).toHaveLength(1);
+  });
+});
+
+describe('order-push status updates', () => {
+  it('sends the payment for an order first sent on submission', async () => {
+    const fetchMock = vi.fn(async (url: string) =>
+      String(url).includes('/orders/createorder')
+        ? shipStationResponse(200, { orderId: 10 })
+        : shipStationResponse(200, { orderId: 10, orderStatus: 'awaiting_payment' }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const record = order({ paid: true });
+    record.$app = { shipstation: { order_key: record.id, shipstation_order_id: 10, payload_hash: 'stale' } };
+    const swell = swellStub(record);
+    swell.settings = vi.fn(async () => appSettings({ push_trigger: 'submitted' }));
+    const req = createMockRequest({
+      swell,
+      data: { id: record.id, $event: { type: 'order.paid', data: {} } },
+    });
+
+    await orderPush(req);
+
+    const create = fetchMock.mock.calls.find(([url]) => String(url).includes('/orders/createorder'));
+    expect(JSON.parse(String((create as any)[1].body)).orderStatus).toBe('awaiting_shipment');
+  });
+
+  it('does not create an order on payment that was never sent', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const swell = swellStub(order());
+    swell.settings = vi.fn(async () => appSettings({ push_trigger: 'submitted' }));
+    const req = createMockRequest({
+      swell,
+      data: { id: 'order_1', $event: { type: 'order.paid', data: {} } },
+    });
+
+    await orderPush(req);
+
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
