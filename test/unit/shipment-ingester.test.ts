@@ -357,3 +357,140 @@ describe('ingestShipments', () => {
     expect(swell.get.mock.calls.filter(([url]) => url === '/shipments')).toHaveLength(1);
   });
 });
+
+describe('ingestShipments with large and mixed deliveries', () => {
+  /** One order per shipment, the shape of a batch of labels bought together. */
+  function batch(count: number) {
+    const orders = new Map<string, Record<string, any>>();
+    const shipments: ShipStationShipment[] = [];
+    for (let i = 0; i < count; i += 1) {
+      const id = `6650f1a2b3c4d5e6f7a8${i.toString(16).padStart(4, '0')}`;
+      const record = { ...order(), id, number: `N${i}` };
+      orders.set(id, record);
+      shipments.push(
+        shipStationShipment({ shipmentId: 1000 + i, orderKey: id, orderNumber: `N${i}` }) as ShipStationShipment,
+      );
+    }
+    let next = 0;
+    const swell = {
+      get: vi.fn(async (url: string, query?: Record<string, any>) => {
+        if (url === '/orders') {
+          const ids: string[] = query?.id?.$in ?? [];
+          return { results: ids.map((id) => orders.get(id)).filter(Boolean) };
+        }
+        if (url === '/orders/{id}') {
+          return orders.get(query?.id) ?? null;
+        }
+        if (url === '/shipments') {
+          return { results: [], count: 0 };
+        }
+        return null;
+      }),
+      post: vi.fn(async (_url: string, body: Record<string, any>) => ({ id: `ship_${next++}`, ...body })),
+      put: vi.fn(async () => ({})),
+    };
+    return { swell, shipments };
+  }
+
+  it('records every shipment in a delivery of more than 25', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const { swell, shipments } = batch(40);
+    const req = createMockRequest({ swell });
+
+    const summary = await ingestShipments(req, settings, shipments);
+
+    expect(summary).toMatchObject({ created: 40, deferred: 0, retry: false });
+    expect(swell.post).toHaveBeenCalledTimes(40);
+    // Orders and existing shipments were read in bulk, not two calls per order.
+    expect(swell.get.mock.calls.filter(([url]) => url === '/orders/{id}')).toHaveLength(0);
+    expect(swell.get.mock.calls.filter(([url]) => url === '/shipments')).toHaveLength(1);
+  });
+
+  it('defers what it cannot reach in time and asks for a redelivery instead of dropping it', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { swell, shipments } = batch(30);
+    const req = createMockRequest({ swell });
+
+    const summary = await ingestShipments(req, settings, shipments, { deadline: Date.now() - 1 });
+
+    expect(summary).toMatchObject({ created: 0, deferred: 30, retry: true });
+    expect(swell.post).not.toHaveBeenCalled();
+  });
+
+  it('a redelivery skips what was recorded and records the rest', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const { swell, shipments } = batch(30);
+    // The first 20 were recorded by an earlier, interrupted delivery.
+    swell.get.mockImplementation(async (url: string, query?: Record<string, any>) => {
+      if (url === '/orders') {
+        return {
+          results: (query?.id?.$in ?? []).map((id: string) => ({ ...order(), id })),
+        };
+      }
+      if (url === '/shipments') {
+        const recorded = shipments.slice(0, 20).map((shipment, i) => ({
+          id: `old_${i}`,
+          order_id: shipment.orderKey,
+          $app: { shipstation: { shipment_id: shipment.shipmentId } },
+        }));
+        return { results: recorded, count: recorded.length };
+      }
+      return null;
+    });
+    const req = createMockRequest({ swell });
+
+    const summary = await ingestShipments(req, settings, shipments);
+
+    expect(summary).toMatchObject({ duplicates: 20, created: 10, retry: false });
+  });
+
+  it('records a replacement label voided and re-bought in the same delivery', async () => {
+    // Order of 2: label 900001 recorded earlier for both, then voided and replaced by
+    // 900002. The order was read before the void, so both items still count as shipped.
+    const shippedOrder = order({
+      items: [orderItem({ quantity_deliverable: 0, quantity_delivered: 2 })],
+    });
+    const swell = swellStub({
+      orders: shippedOrder,
+      shipments: [
+        {
+          id: 'first_label',
+          canceled: false,
+          items: [{ order_item_id: 'item_1', product_id: 'prod_1', quantity: 2 }],
+          $app: { shipstation: { shipment_id: 900001 } },
+        },
+      ],
+    });
+    const req = createMockRequest({ swell });
+
+    // ShipStation lists the replacement first; the void must still be applied first.
+    const summary = await ingestShipments(req, settings, [
+      shipStationShipment({ shipmentId: 900002, trackingNumber: 'NEW' }) as ShipStationShipment,
+      shipStationShipment({ shipmentId: 900001, voided: true }) as ShipStationShipment,
+    ]);
+
+    expect(summary).toMatchObject({ canceled: 1, created: 1, skipped: 0 });
+    expect(swell.post.mock.calls[0][1]).toMatchObject({
+      tracking_code: 'NEW',
+      items: [{ order_item_id: 'item_1', product_id: 'prod_1', quantity: 2 }],
+    });
+  });
+
+  it('treats a rejected shipment as permanent and a Swell outage as retryable', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const rejected = swellStub({ orders: order() });
+    rejected.post.mockRejectedValueOnce(Object.assign(new Error('Invalid item'), { status: 400 }));
+    const permanent = await ingestShipments(createMockRequest({ swell: rejected }), settings, [
+      shipStationShipment() as ShipStationShipment,
+    ]);
+    expect(permanent).toMatchObject({ failed: 1, retry: false });
+
+    const down = swellStub({ orders: order() });
+    down.post.mockRejectedValueOnce(Object.assign(new Error('Bad gateway'), { status: 502 }));
+    const transient = await ingestShipments(createMockRequest({ swell: down }), settings, [
+      shipStationShipment() as ShipStationShipment,
+    ]);
+    expect(transient).toMatchObject({ failed: 1, retry: true });
+  });
+});

@@ -341,6 +341,8 @@ export class ShipStationClient {
     // SHIP_NOTIFY resource URLs default this off, and without it there are no per-item
     // quantities to build a partial shipment from.
     url.searchParams.set('includeShipmentItems', 'True');
+    // ShipStation's largest page, so a big batch of labels needs as few calls as possible.
+    url.searchParams.set('pageSize', '500');
     return this.send<{ shipments?: ShipStationShipment[]; pages?: number }>('GET', url.toString());
   }
 }

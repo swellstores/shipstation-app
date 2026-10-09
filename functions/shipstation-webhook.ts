@@ -31,7 +31,26 @@ export const config: SwellConfig = {
 /** Shipment notifications. Everything else is acknowledged and ignored. */
 const HANDLED_EVENTS = ['SHIP_NOTIFY', 'ITEM_SHIP_NOTIFY'];
 
-const MAX_PAGES = 3;
+/**
+ * Pages of a notification's shipments read per delivery. `fetchShipments` asks for 500 a
+ * page, so this covers 2,000 shipments, far more than one batch of labels in practice.
+ */
+const MAX_PAGES = 4;
+
+/** Stop reading pages past this point and keep the rest of the budget for recording. */
+const PAGE_BUDGET_MS = 3000;
+
+/**
+ * When recording stops. Functions get 10s; the last shipment started before this still
+ * has time to finish and the response to go out.
+ */
+const INGEST_DEADLINE_MS = 7000;
+
+interface CollectedShipments {
+  shipments: ShipStationShipment[];
+  /** False when pages were left unread because time ran short; a redelivery reads them. */
+  complete: boolean;
+}
 
 /**
  * Compares the secret without leaking how much of it matched. The length check is fine to
@@ -52,7 +71,8 @@ async function collectShipments(
   settings: ShipStationSettings,
   body: Record<string, any>,
   secretVerified: boolean,
-): Promise<ShipStationShipment[]> {
+  started: number,
+): Promise<CollectedShipments> {
   if (settings.allow_test_payload && Array.isArray(body.shipments)) {
     if (!secretVerified) {
       // Inline shipments are taken on trust, so this path alone needs the secret.
@@ -61,7 +81,7 @@ async function collectShipments(
     console.log(
       `ShipStation: reading ${body.shipments.length} shipment(s) from the request body (test payloads are enabled)`,
     );
-    return body.shipments as ShipStationShipment[];
+    return { shipments: body.shipments as ShipStationShipment[], complete: true };
   }
 
   const resourceUrl = typeof body.resource_url === 'string' ? body.resource_url : '';
@@ -78,28 +98,33 @@ async function collectShipments(
   const collected: ShipStationShipment[] = [];
   let next: string = resourceUrl;
 
-  for (let page = 1; page <= MAX_PAGES; page += 1) {
+  for (let page = 1; ; page += 1) {
     const response = await client.fetchShipments(next);
     collected.push(...(response?.shipments ?? []));
 
     const pages = Number(response?.pages ?? 1);
     if (!Number.isFinite(pages) || page >= pages) {
-      if (Number.isFinite(pages) && pages > MAX_PAGES) {
-        console.warn(
-          `ShipStation: resource has ${pages} pages but only ${MAX_PAGES} were read; the rest arrive with the next notification.`,
-        );
-      }
-      break;
+      return { shipments: collected, complete: true };
+    }
+    if (page >= MAX_PAGES) {
+      // Rereading cannot reach these either, so say so plainly instead of promising
+      // they arrive later.
+      console.error(
+        `ShipStation: this notification has ${pages} pages of shipments and only ${MAX_PAGES} are read; shipments on pages ${MAX_PAGES + 1}-${pages} are not recorded. Re-send them from ShipStation in smaller batches.`,
+      );
+      return { shipments: collected, complete: true };
+    }
+    if (Date.now() - started > PAGE_BUDGET_MS) {
+      return { shipments: collected, complete: false };
     }
     const url = new URL(resourceUrl);
     url.searchParams.set('page', String(page + 1));
     next = url.toString();
   }
-
-  return collected;
 }
 
 export async function post(req: SwellRequest) {
+  const started = Date.now();
   const settings = await getSettings(req);
 
   const body = (typeof req.body === 'object' && req.body !== null ? req.body : {}) as Record<
@@ -132,12 +157,14 @@ export async function post(req: SwellRequest) {
     return { ok: true, ignored: `Unhandled resource_type "${resourceType}".` };
   }
 
-  const shipments = await collectShipments(settings, body, secretVerified);
-  if (shipments.length === 0) {
+  const { shipments, complete } = await collectShipments(settings, body, secretVerified, started);
+  if (shipments.length === 0 && complete) {
     return { ok: true, received: 0, message: 'Notification contained no shipments.' };
   }
 
-  const summary = await ingestShipments(req, settings, shipments);
+  const summary = await ingestShipments(req, settings, shipments, {
+    deadline: started + INGEST_DEADLINE_MS,
+  });
   const payload = {
     resource_type: resourceType || null,
     received: shipments.length,
@@ -146,14 +173,19 @@ export async function post(req: SwellRequest) {
     duplicates: summary.duplicates,
     skipped: summary.skipped,
     unmatched: summary.unmatched,
+    deferred: summary.deferred,
     failed: summary.failed,
+    complete,
     details: summary.details,
   };
 
-  // Nothing landed and something broke: answer with a retryable status so ShipStation
-  // redelivers. Partial success is reported as 200 — the failures are recorded on the
-  // orders and retrying would duplicate the shipments that did succeed.
-  if (summary.failed > 0 && summary.created === 0 && summary.canceled === 0) {
+  // Work is left that a redelivery would do: shipments not reached in time, pages not
+  // read, or a transient error. Answer with a retryable status so ShipStation sends the
+  // notification again. That is safe even after partial success, because every recorded
+  // shipment carries its ShipStation id and is recognised as a duplicate. Permanent
+  // failures (no usable address) are recorded on the order and acknowledged, since a
+  // retry would fail the same way, and so are shipments for other channels' orders.
+  if (summary.retry || !complete) {
     return new SwellResponse({ ok: false, ...payload }, { status: 503 });
   }
 

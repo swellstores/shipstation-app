@@ -170,4 +170,40 @@ describe('shipstation-webhook route', () => {
 
     expect(response.status).toBe(503);
   });
+
+  it('asks for a redelivery when it runs out of time, rather than dropping the rest', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(Date, 'now').mockReturnValueOnce(0).mockReturnValue(60_000);
+    const req = request({
+      body: {
+        resource_type: 'SHIP_NOTIFY',
+        shipments: [shipStationShipment(), shipStationShipment({ shipmentId: 900002 })],
+      },
+    });
+
+    const response = (await post(req)) as Response;
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ deferred: 2 });
+  });
+
+  it('reads notification pages at the largest page size', async () => {
+    const fetchMock = vi.fn(
+      async (_url: string) =>
+        new Response(JSON.stringify({ shipments: [], pages: 1 }), { status: 200 }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const req = request({
+      query: {},
+      body: {
+        resource_type: 'SHIP_NOTIFY',
+        resource_url: 'https://ssapi.shipstation.com/shipments?batchId=42',
+      },
+      settings: { allow_test_payload: false },
+    });
+
+    await post(req);
+
+    expect(new URL(fetchMock.mock.calls[0][0]).searchParams.get('pageSize')).toBe('500');
+  });
 });

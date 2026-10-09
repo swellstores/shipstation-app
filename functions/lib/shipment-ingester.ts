@@ -9,8 +9,18 @@ import { ShipStationSettings, appId } from './settings';
 import { ShipStationShipment, ShipStationShipmentItem, errorText } from './shipstation';
 import { readSyncState, recordSyncState } from './sync-state';
 
-/** Keeps one webhook delivery inside the function's time budget. */
-export const MAX_SHIPMENTS_PER_DELIVERY = 25;
+/**
+ * Default time to spend recording shipments, measured from the start of the call. Work
+ * left when it runs out is reported as deferred, and the caller asks ShipStation to
+ * redeliver; shipments already recorded are recognised as duplicates next time.
+ */
+export const INGEST_BUDGET_MS = 6000;
+
+/** Orders looked up per `/orders` call when a delivery is read in bulk. */
+const ORDER_LOOKUP_CHUNK = 50;
+
+/** Most shipments one `/shipments` call returns. */
+const SHIPMENT_LOOKUP_LIMIT = 1000;
 
 const ORDER_EXPAND = ['items.product', 'items.variant'];
 
@@ -20,6 +30,7 @@ export type IngestAction =
   | 'duplicate'
   | 'skipped'
   | 'unmatched'
+  | 'deferred'
   | 'error';
 
 export interface IngestDetail {
@@ -28,6 +39,8 @@ export interface IngestDetail {
   orderId?: string;
   shipmentRecordId?: string;
   message?: string;
+  /** For errors: whether trying the same shipment again could succeed. */
+  retryable?: boolean;
 }
 
 export interface IngestSummary {
@@ -37,8 +50,17 @@ export interface IngestSummary {
   skipped: number;
   /** Shipments for orders that are not this environment's: acknowledged, not failures. */
   unmatched: number;
+  /** Not reached before the time budget ran out. */
+  deferred: number;
   failed: number;
+  /** Something is left that a redelivery would record: deferred work or a transient error. */
+  retry: boolean;
   details: IngestDetail[];
+}
+
+export interface IngestOptions {
+  /** Epoch ms after which no new shipment is started. */
+  deadline?: number;
 }
 
 interface ShipmentItemInput {
@@ -154,13 +176,14 @@ async function resolveOrder(
   settings: ShipStationSettings,
   shipment: ShipStationShipment,
   env: SwellEnvironment,
+  contexts: Map<string, OrderContext>,
 ): Promise<Record<string, any> | null> {
   const key = parseOrderKey(shipment.orderKey);
   if (key) {
     if (key.environment.toLowerCase() !== environmentName(env).toLowerCase()) {
       return null;
     }
-    const order = await getOrder(req, key.orderId);
+    const order = contexts.get(key.orderId)?.order ?? (await getOrder(req, key.orderId));
     if (order) {
       return order;
     }
@@ -205,6 +228,21 @@ export function indexOrderItems(order: Record<string, any>): {
   return { itemsById, itemsBySku, remaining };
 }
 
+function newContext(
+  req: SwellRequest,
+  order: Record<string, any>,
+  shipments: Array<Record<string, any>>,
+): OrderContext {
+  const byShipStationId = new Map<number, Record<string, any>>();
+  for (const record of shipments) {
+    const id = appShipmentId(req, record);
+    if (id !== null) {
+      byShipStationId.set(id, record);
+    }
+  }
+  return { order, byShipStationId, created: 0, ...indexOrderItems(order) };
+}
+
 async function orderContext(
   req: SwellRequest,
   order: Record<string, any>,
@@ -220,22 +258,81 @@ async function orderContext(
     limit: 100,
   })) as { results?: Array<Record<string, any>> } | null;
 
-  const byShipStationId = new Map<number, Record<string, any>>();
-  for (const record of existing?.results ?? []) {
-    const id = appShipmentId(req, record);
-    if (id !== null) {
-      byShipStationId.set(id, record);
-    }
-  }
-
-  const context: OrderContext = {
-    order,
-    byShipStationId,
-    created: 0,
-    ...indexOrderItems(order),
-  };
+  const context = newContext(req, order, existing?.results ?? []);
   contexts.set(order.id, context);
   return context;
+}
+
+function chunks<T>(values: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < values.length; i += size) {
+    out.push(values.slice(i, i + size));
+  }
+  return out;
+}
+
+/**
+ * Reads every order a delivery refers to, and the shipments already recorded on them, in
+ * a few bulk calls instead of two per order. That keeps a redelivered notification cheap:
+ * the shipments recorded the first time are recognised as duplicates without a round trip
+ * each, so each redelivery gets further through a large batch than the last.
+ *
+ * Best effort: anything not found here is looked up one order at a time as before.
+ */
+async function prefetchContexts(
+  req: SwellRequest,
+  shipments: ShipStationShipment[],
+  env: SwellEnvironment,
+  contexts: Map<string, OrderContext>,
+): Promise<void> {
+  const ids = new Set<string>();
+  for (const shipment of shipments) {
+    const key = parseOrderKey(shipment.orderKey);
+    if (key && key.environment.toLowerCase() === environmentName(env).toLowerCase()) {
+      ids.add(key.orderId);
+    }
+  }
+  if (ids.size < 2) {
+    return;
+  }
+
+  try {
+    for (const chunk of chunks([...ids], ORDER_LOOKUP_CHUNK)) {
+      const orders = (await req.swell.get('/orders', {
+        id: { $in: chunk },
+        expand: ORDER_EXPAND,
+        limit: chunk.length,
+      })) as { results?: Array<Record<string, any>> } | null;
+      const found = (orders?.results ?? []).filter((order) => order?.id);
+      if (found.length === 0) {
+        continue;
+      }
+
+      const recorded = (await req.swell.get('/shipments', {
+        order_id: { $in: found.map((order) => order.id) },
+        limit: SHIPMENT_LOOKUP_LIMIT,
+      })) as { results?: Array<Record<string, any>>; count?: number } | null;
+      const results = recorded?.results ?? [];
+      // A truncated answer could hide a duplicate; leave those orders to the lookup that
+      // reads them one at a time.
+      if (typeof recorded?.count === 'number' && recorded.count > results.length) {
+        continue;
+      }
+
+      const byOrder = new Map<string, Array<Record<string, any>>>();
+      for (const record of results) {
+        const orderId = String(record?.order_id ?? '');
+        byOrder.set(orderId, [...(byOrder.get(orderId) ?? []), record]);
+      }
+      for (const order of found) {
+        if (!contexts.has(order.id)) {
+          contexts.set(order.id, newContext(req, order, byOrder.get(order.id) ?? []));
+        }
+      }
+    }
+  } catch (err) {
+    console.warn(`ShipStation: could not read the delivery's orders in bulk: ${errorText(err)}`);
+  }
 }
 
 function matchOrderItem(
@@ -346,6 +443,31 @@ function buildDestination(
   };
 }
 
+/**
+ * Puts a canceled shipment's quantities back into what the order still has to ship, so a
+ * replacement label later in the same delivery is matched instead of skipped. The order
+ * was read before the void, when those items still counted as delivered.
+ */
+function restoreQuantities(context: OrderContext, shipment: Record<string, any>): void {
+  const items = Array.isArray(shipment.items) ? shipment.items : [];
+  for (const item of items) {
+    const id = String(item?.order_item_id ?? '');
+    const orderItem = context.itemsById.get(id);
+    if (!orderItem) {
+      continue;
+    }
+    const left = context.remaining.get(id) ?? 0;
+    const cap = Math.max(0, toInt(orderItem.quantity_total));
+    context.remaining.set(id, Math.min(cap, left + Math.max(0, toInt(item.quantity))));
+  }
+}
+
+/** Swell errors carry the HTTP status; 4xx means the same request would fail again. */
+function isTransient(err: unknown): boolean {
+  const status = Number((err as { status?: unknown })?.status);
+  return !Number.isFinite(status) || status === 0 || status === 429 || status >= 500;
+}
+
 async function ingestOne(
   req: SwellRequest,
   settings: ShipStationSettings,
@@ -357,7 +479,7 @@ async function ingestOne(
     ? Number(shipment.shipmentId)
     : null;
 
-  const order = await resolveOrder(req, settings, shipment, env);
+  const order = await resolveOrder(req, settings, shipment, env, contexts);
   if (!order) {
     return {
       shipmentId,
@@ -390,6 +512,8 @@ async function ingestOne(
       canceled: true,
       ...req.appValues({ voided: true }),
     });
+    existing.canceled = true;
+    restoreQuantities(context, existing);
     return {
       shipmentId,
       action: 'canceled',
@@ -425,6 +549,7 @@ async function ingestOne(
       action: 'error',
       orderId: order.id,
       message: 'Shipment has no usable destination address.',
+      retryable: false,
     };
   }
 
@@ -485,42 +610,59 @@ async function ingestOne(
  * Turns ShipStation shipments into Swell shipment records. Partial fulfillment needs no
  * special handling: the platform recomputes the order's delivered status from the item
  * quantities on each shipment.
+ *
+ * Every shipment in the delivery is considered; none is dropped. Voided labels go first,
+ * so a void and its replacement in the same delivery free up and reuse the same items.
+ * If the time budget runs out, the rest are reported as `deferred` and `retry` is set:
+ * a redelivery recognises what was already recorded and carries on from there.
  */
 export async function ingestShipments(
   req: SwellRequest,
   settings: ShipStationSettings,
   shipments: ShipStationShipment[],
+  options: IngestOptions = {},
 ): Promise<IngestSummary> {
+  const deadline = options.deadline ?? Date.now() + INGEST_BUDGET_MS;
   const summary: IngestSummary = {
     created: 0,
     canceled: 0,
     duplicates: 0,
     skipped: 0,
     unmatched: 0,
+    deferred: 0,
     failed: 0,
+    retry: false,
     details: [],
   };
   const env = swellEnvironment(req);
 
-  const batch = shipments.slice(0, MAX_SHIPMENTS_PER_DELIVERY);
-  if (shipments.length > batch.length) {
-    console.warn(
-      `ShipStation: delivery contained ${shipments.length} shipments; processing the first ${batch.length}. The remainder will arrive with the next notification.`,
-    );
-  }
+  const ordered = [
+    ...shipments.filter((shipment) => shipment?.voided),
+    ...shipments.filter((shipment) => !shipment?.voided),
+  ];
 
   const contexts = new Map<string, OrderContext>();
+  await prefetchContexts(req, ordered, env, contexts);
 
-  for (const shipment of batch) {
+  for (const shipment of ordered) {
     let detail: IngestDetail;
-    try {
-      detail = await ingestOne(req, settings, shipment, contexts, env);
-    } catch (err) {
+    if (Date.now() >= deadline) {
       detail = {
         shipmentId: Number(shipment?.shipmentId) || null,
-        action: 'error',
-        message: errorText(err),
+        action: 'deferred',
+        message: 'Not reached in this delivery; recorded when ShipStation redelivers it.',
       };
+    } else {
+      try {
+        detail = await ingestOne(req, settings, shipment, contexts, env);
+      } catch (err) {
+        detail = {
+          shipmentId: Number(shipment?.shipmentId) || null,
+          action: 'error',
+          message: errorText(err),
+          retryable: isTransient(err),
+        };
+      }
     }
 
     summary.details.push(detail);
@@ -543,12 +685,25 @@ export async function ingestShipments(
         summary.unmatched += 1;
         console.log(`ShipStation: ignored shipment ${detail.shipmentId ?? '(no id)'}: ${detail.message}`);
         break;
+      case 'deferred':
+        summary.deferred += 1;
+        summary.retry = true;
+        break;
       default:
         summary.failed += 1;
+        if (detail.retryable !== false) {
+          summary.retry = true;
+        }
         console.error(
           `ShipStation: could not record shipment ${detail.shipmentId ?? '(no id)'}: ${detail.message}`,
         );
     }
+  }
+
+  if (summary.deferred > 0) {
+    console.warn(
+      `ShipStation: ran out of time with ${summary.deferred} of ${shipments.length} shipment(s) still to check; asking ShipStation to redeliver.`,
+    );
   }
 
   const now = new Date().toISOString();
@@ -559,11 +714,22 @@ export async function ingestShipments(
     }
   }
 
+  // Only orders this delivery actually touched; prefetched orders it never reached are
+  // left alone.
+  const touched = new Set(
+    summary.details
+      .filter((detail) => detail.orderId && detail.action !== 'deferred')
+      .map((detail) => detail.orderId as string),
+  );
   for (const [orderId, context] of contexts) {
+    if (!touched.has(orderId)) {
+      continue;
+    }
     const state = readSyncState(req, context.order);
+    const active = [...context.byShipStationId.values()].filter((record) => !record?.canceled);
     await recordSyncState(req, orderId, {
       last_webhook_at: now,
-      shipments_count: context.byShipStationId.size || (state.shipments_count ?? 0),
+      shipments_count: active.length,
       last_error: failureByOrder.get(orderId) ?? state.last_error ?? null,
     });
   }
