@@ -52,7 +52,8 @@ prefix.
 to ship are sent too, five at a time every five minutes, oldest first, until none are left.
 It's the same set the built-in integration sends on its first sync, so a store switching over
 doesn't start with an empty ShipStation. It then stays idle, because every order it touches
-is marked with a sync status. Turn it off with **Send existing orders**.
+is marked with a sync status. Turn it off with **Send existing orders**. It also does nothing
+while **Push orders to ShipStation** is set to only on request.
 
 **How it's built.** `functions/order-backfill.ts`, a cron every five minutes.
 
@@ -159,7 +160,7 @@ secret** from ShipStation → **Settings → Account → API Settings**.
 | ShipStation store ID | — | Optional. Puts orders in a specific ShipStation store and limits webhooks to it. Leave empty for the default store. |
 | Push orders to ShipStation | When paid | When an order is first sent: when paid, when submitted, or only on request (Re-sync on save). |
 | Order number prefix | — | Optional. Added in front of the Swell order number, for example `SW-`, when several channels feed one ShipStation account. |
-| Send existing orders | On | After setup, send the orders that are already paid and waiting to ship. |
+| Send existing orders | On | After setup, send the orders that are already paid and waiting to ship. Ignored when orders are only pushed on request. |
 | Sync order edits | On | Re-send an order when its shipping address or items change. |
 | Sync cancellations | On | Mark the order cancelled in ShipStation when it's canceled in Swell. |
 | Webhook secret | — | Any random string of 16+ characters. Added to the callback address and required for test payloads. See *Limits*. |

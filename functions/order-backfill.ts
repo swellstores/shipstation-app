@@ -20,7 +20,8 @@ export const TIME_BUDGET_MS = 5000;
 /**
  * Sends the orders that were already open when the app was set up, the way the native
  * integration does on its first sync (swell-admin `lib/shipstation.js`, `syncOrders`):
- * paid, not canceled, not closed, with items still to ship.
+ * paid, not canceled, not closed, with items still to ship. It follows the push trigger:
+ * with "Only when re-synced manually" it sends nothing.
  *
  * Without this, a merchant switching over starts with an empty ShipStation and every
  * order placed before the switch has to be pushed by hand.
@@ -39,6 +40,15 @@ export default async function (req: SwellRequest) {
 
   if (!settings.enabled || !settings.sync_existing || !hasCredentials(settings)) {
     return { ok: true, ignored: 'Existing-order sync is off or the app is not configured.' };
+  }
+
+  // "Only when re-synced manually" means nothing reaches ShipStation unless the merchant
+  // asks for it, and that includes the orders that were open at setup.
+  if (settings.push_trigger === 'manual') {
+    return {
+      ok: true,
+      ignored: 'Orders are only sent on request, so existing orders are not sent automatically.',
+    };
   }
 
   const started = Date.now();

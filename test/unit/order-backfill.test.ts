@@ -87,6 +87,26 @@ describe('order-backfill cron', () => {
     expect(get).not.toHaveBeenCalled();
   });
 
+  it('sends nothing when orders are only pushed on request', async () => {
+    // Send existing orders defaults on, so a merchant who picks "Only when re-synced
+    // manually" would otherwise still get every open paid order sent.
+    const { req, get } = request({ settings: { push_trigger: 'manual' }, openOrders: ['order_a'] });
+
+    await expect(backfill(req)).resolves.toMatchObject({ ignored: expect.any(String) });
+    expect(get).not.toHaveBeenCalled();
+  });
+
+  it('still sends existing orders with the submitted trigger', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(JSON.stringify({ orderId: 1 }), { status: 200 })),
+    );
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const { req } = request({ settings: { push_trigger: 'submitted' }, openOrders: ['order_a'] });
+
+    await expect(backfill(req)).resolves.toMatchObject({ pushed: 1 });
+  });
+
   it('does nothing while the app is switched off or has no credentials', async () => {
     for (const settings of [{ enabled: false }, { api_key: '' }]) {
       const { req, get } = request({ settings, openOrders: ['order_a'] });

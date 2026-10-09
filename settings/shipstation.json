@@ -63,7 +63,7 @@
           "label": "Send existing orders",
           "type": "toggle",
           "default": true,
-          "description": "After setup, send orders that are already paid and waiting to ship, a few every five minutes until none are left. Matches the native integration's first sync."
+          "description": "After setup, send orders that are already paid and waiting to ship, a few every five minutes until none are left. Matches the native integration's first sync. Has no effect when orders are only pushed on request."
         },
         {
           "id": "sync_updates",
