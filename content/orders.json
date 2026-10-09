@@ -8,10 +8,9 @@
       "label": "Sync status",
       "type": "select",
       "options": [
-        { "value": "pending", "label": "Pending" },
         { "value": "synced", "label": "Synced" },
         { "value": "error", "label": "Error" },
-        { "value": "skipped", "label": "Skipped (already shipped)" },
+        { "value": "skipped", "label": "Skipped" },
         { "value": "canceled", "label": "Canceled" }
       ]
     },

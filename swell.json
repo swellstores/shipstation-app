@@ -5,6 +5,9 @@
 	"type": "integration",
 	"version": "1.0.1",
 	"permissions": [],
+	"integrations": [
+		"shipstation"
+	],
 	"support_email": "support@swell.is",
 	"documentation_url": "https://developers.swell.is/app-guides/shipstation",
 	"price_external": true,

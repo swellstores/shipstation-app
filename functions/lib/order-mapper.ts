@@ -48,7 +48,8 @@ function toAddress(source: unknown, fallbackName?: string): ShipStationAddress |
     return null;
   }
   const src = source as Record<string, unknown>;
-  const name = str(src.name) ?? joinName(src.first_name, src.last_name) ?? fallbackName;
+  // `||`, not `??`: joinName returns '' rather than undefined when there is no name.
+  const name = str(src.name) || joinName(src.first_name, src.last_name) || fallbackName;
   const street1 = str(src.address1);
   if (!name && !street1) {
     return null;

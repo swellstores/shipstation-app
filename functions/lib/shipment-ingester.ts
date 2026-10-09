@@ -422,10 +422,11 @@ function buildDestination(
   const country = str(shipTo.country) ?? str(fallback.country);
   const address1 = str(shipTo.street1) ?? str(fallback.address1);
   const name =
-    str(shipTo.name) ??
-    str(fallback.name) ??
-    [fallback.first_name, fallback.last_name].filter(Boolean).join(' ') ??
-    undefined;
+    str(shipTo.name) ||
+    str(fallback.name) ||
+    [fallback.first_name, fallback.last_name]
+      .filter((part): part is string => typeof part === 'string' && part.trim() !== '')
+      .join(' ');
 
   if (!address1 || !country || country.length !== 2) {
     return null;

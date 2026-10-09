@@ -64,6 +64,21 @@ describe('mapOrder', () => {
     expect(payload.billTo.street1).toBe('221 Baker St');
   });
 
+  it("uses the customer's name when the address has none", () => {
+    const payload = mapOrder(
+      order({ shipping: { address1: '221 Baker St', country: 'US' }, billing: null }),
+    );
+
+    expect(payload.shipTo.name).toBe('Ada Lovelace');
+  });
+
+  it('keeps an environment-specific order key in the searchable custom field', () => {
+    const payload = mapOrder(order(), { orderKey: 'test:6650f1a2b3c4d5e6f7a8b9c0' });
+
+    expect(payload.orderKey).toBe('test:6650f1a2b3c4d5e6f7a8b9c0');
+    expect(payload.advancedOptions?.customField1).toBe('swell:test:6650f1a2b3c4d5e6f7a8b9c0');
+  });
+
   it('refuses to map an order with no address at all', () => {
     expect(() => mapOrder(order({ shipping: null, billing: null }))).toThrow(
       /no shipping or billing address/,

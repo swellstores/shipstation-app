@@ -1,7 +1,8 @@
 import { appId } from './settings';
 import { errorText } from './shipstation';
 
-export type SyncStatus = 'pending' | 'synced' | 'error' | 'skipped' | 'canceled';
+/** Unset until the order is first sent. */
+export type SyncStatus = 'synced' | 'error' | 'skipped' | 'canceled';
 
 export interface SyncState {
   sync_status?: SyncStatus | null;

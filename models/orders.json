@@ -6,9 +6,9 @@
     "sync_status": {
       "type": "string",
       "label": "ShipStation sync status",
-      "enum": ["pending", "synced", "error", "skipped", "canceled"],
+      "enum": ["synced", "error", "skipped", "canceled"],
       "private": true,
-      "description": "pending: queued or awaiting a manual push. synced: accepted by ShipStation. error: last push failed, see last_error. skipped: ShipStation has already shipped or cancelled the order, so it can no longer be updated. canceled: cancellation was pushed."
+      "description": "Unset until the order is first sent. synced: accepted by ShipStation. error: last push failed, see last_error. skipped: not sent, either because the order has nothing to ship or because ShipStation has already shipped or cancelled it; last_error says which. canceled: cancellation was pushed."
     },
     "order_key": {
       "type": "string",
