@@ -14,7 +14,7 @@ visible sync status on every order.
 | --- | --- | --- |
 | When orders are sent | When paid | When paid, when submitted, or only on request |
 | Orders open at setup | Sent on first sync | Sent after setup, a few every five minutes |
-| Order edits | Never re-sent | Address and item changes re-sent |
+| Order changes | Never re-sent | Address and item edits, payments and holds re-sent |
 | Cancellations | Not sent | Order marked cancelled in ShipStation |
 | Partial shipments | One shipment per label | One Swell shipment per ShipStation shipment, with per-item quantities |
 | Voided labels | Ignored | Matching Swell shipment canceled |
@@ -36,7 +36,9 @@ values and packing slips. Only physical items are sent; an order with nothing to
 
 The Swell order id is sent as ShipStation's `orderKey`, so sending the same order again
 updates it rather than creating a duplicate. Held orders are sent as *On hold*, unpaid ones
-as *Awaiting payment*.
+as *Awaiting payment*. When an order already in ShipStation is paid, or put on or taken off
+hold, its new status is sent too, so an order sent at submission doesn't stay *Awaiting
+payment* after the customer pays.
 
 **Where it shows up.** In ShipStation's order list, under the store set in **ShipStation
 store ID** (or the default store), numbered with the Swell order number and the optional
@@ -59,13 +61,19 @@ while **Push orders to ShipStation** is set to only on request.
 
 ### Order edits and cancellations
 
-**What it does.** If an order's shipping address or items change after it was sent, it is
-sent again (**Sync order edits**). If it is canceled in Swell, it is marked cancelled in
-ShipStation (**Sync cancellations**). ShipStation refuses changes to orders it has already
-shipped or cancelled; those are recorded as **Skipped** with the reason, not retried.
+**What it does.** If an order's shipping or billing address or items change after it was
+sent, it is sent again (**Sync order edits**). Payment and hold changes are always sent. If
+it is canceled in Swell, it is marked cancelled in ShipStation (**Sync cancellations**).
+ShipStation refuses changes to orders it has already shipped or cancelled; those are
+recorded as **Skipped** with the reason, not retried.
+
+An update that leaves the order exactly as ShipStation already has it is not sent. That
+includes the update Swell makes to an order's items whenever a shipment is recorded, so
+recording a label never re-sends the order.
 
 **How it's built.** `functions/order-update.ts` on `order.updated`, reading only the changed
-fields; `functions/order-cancel.ts` on `order.canceled`.
+fields and comparing a digest of what would be sent with the last one; `functions/order-push.ts`
+on `order.paid` for orders already sent; `functions/order-cancel.ts` on `order.canceled`.
 
 ### Shipments created from ShipStation
 
@@ -73,8 +81,19 @@ fields; `functions/order-cancel.ts` on `order.canceled`.
 tracking number, carrier, service and the items and quantities in that package. Ship part of
 an order and the order stays awaiting fulfillment; ship the rest and it completes. Swell works
 out the fulfillment status from the shipped quantities, so the two systems can't drift.
-Voiding a label in ShipStation cancels the matching Swell shipment. A notification that
-arrives twice is recognised and not counted twice.
+Voiding a label in ShipStation cancels the matching Swell shipment, and a replacement label
+for the same items is recorded even when both arrive in one notification. A notification
+that arrives twice is recognised and not counted twice.
+
+Every shipment in a notification is recorded. A large batch of labels that doesn't fit in
+one call is finished when ShipStation sends the notification again, picking up where the
+last attempt stopped.
+
+ShipStation notifies the app about every label on the account (or on the chosen ShipStation
+store), including other sales channels'. A shipment is only recorded on the Swell order it
+was sent from: by the order key, or by the order number when ShipStation's order id also
+matches the one recorded when the app sent the order. Shipments for other channels' orders
+are acknowledged and ignored.
 
 **Where it shows up.** The order's shipments and fulfillment status in the Swell dashboard,
 and anywhere the store shows tracking to the customer. Carrier and service are stored as
@@ -95,7 +114,6 @@ last error if there was one. The order list gets a **ShipStation** column and a
 
 | Status | Meaning |
 | --- | --- |
-| Pending | Waiting to be sent |
 | Synced | Accepted by ShipStation |
 | Error | The last attempt failed; the error is shown on the order |
 | Skipped | Not sent: nothing to ship, or ShipStation has already shipped or cancelled it |
@@ -118,7 +136,9 @@ the same thing as an API route, for one order or for up to ten at a time by stat
 **What it does.** Setup registers the two ShipStation webhooks the app needs. Once a day the
 app checks they're still there and still point at the right address, and repairs them if
 not. When the app is switched off, the same daily check removes them, so ShipStation stops
-calling a store that isn't listening.
+calling a store that isn't listening. It only ever touches its own environment's webhooks:
+live's are named `swell-<store-id>-<event>`, any other environment's
+`swell-<store-id>.<environment>-<event>`.
 
 **How it's built.** `functions/setup.ts` (a private route), `functions/webhook-reconcile.ts`
 (daily cron), `functions/lib/webhooks.ts`.
@@ -133,8 +153,8 @@ secret** from ShipStation → **Settings → Account → API Settings**.
 ### Install and configure
 
 1. Install **ShipStation** from the Swell App Store.
-2. **Turn off the built-in ShipStation integration** (Settings → Integrations) if it's on.
-   Otherwise both send every order and ShipStation gets duplicates.
+2. **Turn off the built-in ShipStation integration** (**Integrations** in the dashboard
+   sidebar) if it's on. Otherwise both send every order and ShipStation gets duplicates.
 3. Open **Apps → ShipStation → Settings** and fill in the settings below. At minimum: API key,
    API secret, and **Enable ShipStation sync**.
 4. Register the webhooks by calling the setup route once with the store's secret API key:
@@ -161,7 +181,7 @@ secret** from ShipStation → **Settings → Account → API Settings**.
 | Push orders to ShipStation | When paid | When an order is first sent: when paid, when submitted, or only on request (Re-sync on save). |
 | Order number prefix | — | Optional. Added in front of the Swell order number, for example `SW-`, when several channels feed one ShipStation account. |
 | Send existing orders | On | After setup, send the orders that are already paid and waiting to ship. Ignored when orders are only pushed on request. |
-| Sync order edits | On | Re-send an order when its shipping address or items change. |
+| Sync order edits | On | Re-send an order when its shipping or billing address or items change. Payment and hold changes are sent either way. |
 | Sync cancellations | On | Mark the order cancelled in ShipStation when it's canceled in Swell. |
 | Webhook secret | — | Any random string of 16+ characters. Added to the callback address and required for test payloads. See *Limits*. |
 | Callback URL override | — | Leave empty. Only for pointing ShipStation somewhere else, such as a tunnel during development. |
@@ -184,7 +204,16 @@ secret** from ShipStation → **Settings → Account → API Settings**.
 ## Limits and known issues
 
 - **Live environment only for shipments.** ShipStation's notifications reach a store's live
-  environment. In the test environment orders are still sent, but shipments don't come back.
+  environment. In the test environment orders are still sent, but shipments don't come back,
+  and the test environment registers no webhooks unless a callback URL override is set.
+- **Live and test can share a ShipStation account.** Test orders are sent with a `test:`
+  prefix on their order key (and `swell:test:` in Custom Field 1), so they are separate
+  ShipStation orders from live ones with the same number. A label bought for a test order is
+  never recorded on a live order, and neither environment changes the other's webhooks.
+- **Large label batches rely on ShipStation resending.** When a notification has more
+  shipments than one call can record, the app records what it can and answers with a
+  retryable error so ShipStation sends it again. A single notification with more than 2,000
+  shipments isn't fully read; the app logs an error saying so.
 - **Uninstalling doesn't remove the webhooks.** Swell doesn't notify an app when it's
   uninstalled. Switch the app off and wait for the daily check, or remove them straight away
   with the setup route before uninstalling:
@@ -225,9 +254,10 @@ npm run typecheck
 npm run test
 ```
 
-The unit tests cover order mapping, the existing-order sync, shipment ingestion, the
-ShipStation API client (retries, errors, which hosts it will fetch from), the webhook route,
-the callback address and webhook removal, with no network access. The integration tests in
+The unit tests cover order mapping, the existing-order sync, order updates, shipment
+ingestion (including large and void-then-replace deliveries), the ShipStation API client
+(retries, errors, which hosts it will fetch from), the webhook route, the callback address,
+and webhook ownership across live and test, with no network access. The integration tests in
 `test/integration/` read real data through your Swell CLI session.
 
 Push to Swell Apps and check that everything registered, since a push can succeed with
@@ -273,8 +303,12 @@ Things worth knowing before changing the code:
 - **Don't put app settings in function `conditions`.** A condition on `$settings` stops the
   event being delivered at all, and `$data` conditions match every update. All gating is in
   the handlers, which read `$event.data` for the fields that actually changed.
-- **A record that doesn't exist makes Swell return an error (400), not `null`.** Wrap
-  existence checks accordingly.
+- **A record that doesn't exist can come back empty or as an error (400), depending on the
+  call.** Existence checks handle both.
+- **The environment comes from `req.logParams.environment_id`** (the platform's
+  `Swell-Request-Log` header): `test` in the test environment, empty in live. It is what
+  keeps the two apart in a shared ShipStation account, and webhook changes are refused when
+  it's missing. See `functions/lib/environment.ts`.
 
 ## Contributing
 

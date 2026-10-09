@@ -70,7 +70,7 @@
           "label": "Sync order edits",
           "type": "toggle",
           "default": true,
-          "description": "Re-push an order when its shipping address or line items change. ShipStation rejects edits to orders it has already shipped or cancelled."
+          "description": "Re-push an order when its shipping or billing address or line items change. Payment and hold changes are sent either way. ShipStation rejects edits to orders it has already shipped or cancelled."
         },
         {
           "id": "sync_cancels",
