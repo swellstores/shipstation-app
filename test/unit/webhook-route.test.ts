@@ -147,10 +147,23 @@ describe('shipstation-webhook route', () => {
     await expect(post(req)).rejects.toMatchObject({ status: 400 });
   });
 
-  it('answers with a retryable status when nothing could be recorded', async () => {
+  it("acknowledges shipments for other channels' orders so ShipStation stops redelivering", async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
     const req = request({
       body: { resource_type: 'SHIP_NOTIFY', shipments: [shipStationShipment()] },
       orders: null,
+    });
+
+    await expect(post(req)).resolves.toMatchObject({ ok: true, unmatched: 1, failed: 0 });
+  });
+
+  it('answers with a retryable status when Swell fails transiently', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const req = request({
+      body: { resource_type: 'SHIP_NOTIFY', shipments: [shipStationShipment()] },
+    });
+    req.swell.post = vi.fn(async () => {
+      throw Object.assign(new Error('Service unavailable'), { status: 503 });
     });
 
     const response = (await post(req)) as Response;

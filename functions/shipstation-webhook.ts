@@ -145,6 +145,7 @@ export async function post(req: SwellRequest) {
     canceled: summary.canceled,
     duplicates: summary.duplicates,
     skipped: summary.skipped,
+    unmatched: summary.unmatched,
     failed: summary.failed,
     details: summary.details,
   };

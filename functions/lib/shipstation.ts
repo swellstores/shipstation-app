@@ -266,16 +266,22 @@ export class ShipStationClient {
     });
   }
 
+  /** With `orderKey`, only an order carrying that key is returned. */
   async findOrderByNumber(
     orderNumber: string,
     timeoutMs?: number,
+    orderKey?: string,
   ): Promise<ShipStationOrderResponse | null> {
     const res = await this.request<{ orders?: ShipStationOrderResponse[] }>(
       'GET',
       `/orders?orderNumber=${encodeURIComponent(orderNumber)}`,
       { timeoutMs },
     );
-    return res?.orders?.[0] ?? null;
+    const orders = res?.orders ?? [];
+    if (orderKey === undefined) {
+      return orders[0] ?? null;
+    }
+    return orders.find((order) => order.orderKey === orderKey) ?? null;
   }
 
   async listStores(): Promise<Array<Record<string, unknown>>> {

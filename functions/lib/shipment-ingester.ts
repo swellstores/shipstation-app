@@ -1,4 +1,10 @@
 import { shippableItems, stripOrderPrefix } from './order-mapper';
+import {
+  SwellEnvironment,
+  environmentName,
+  parseOrderKey,
+  swellEnvironment,
+} from './environment';
 import { ShipStationSettings, appId } from './settings';
 import { ShipStationShipment, ShipStationShipmentItem, errorText } from './shipstation';
 import { readSyncState, recordSyncState } from './sync-state';
@@ -8,7 +14,13 @@ export const MAX_SHIPMENTS_PER_DELIVERY = 25;
 
 const ORDER_EXPAND = ['items.product', 'items.variant'];
 
-export type IngestAction = 'created' | 'canceled' | 'duplicate' | 'skipped' | 'no_order' | 'error';
+export type IngestAction =
+  | 'created'
+  | 'canceled'
+  | 'duplicate'
+  | 'skipped'
+  | 'unmatched'
+  | 'error';
 
 export interface IngestDetail {
   shipmentId: number | null;
@@ -23,6 +35,8 @@ export interface IngestSummary {
   canceled: number;
   duplicates: number;
   skipped: number;
+  /** Shipments for orders that are not this environment's: acknowledged, not failures. */
+  unmatched: number;
   failed: number;
   details: IngestDetail[];
 }
@@ -104,31 +118,61 @@ function appShipmentId(req: SwellRequest, record: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+/** A missing record comes back empty or as a "not found" error, depending on the path. */
+function isNotFound(err: unknown): boolean {
+  const status = (err as { status?: unknown })?.status;
+  return status === 404 || /not found/i.test(errorText(err));
+}
+
+async function getOrder(req: SwellRequest, id: string): Promise<Record<string, any> | null> {
+  try {
+    const order = (await req.swell.get('/orders/{id}', {
+      id,
+      expand: ORDER_EXPAND,
+    })) as Record<string, any> | null;
+    return order?.id ? order : null;
+  } catch (err) {
+    if (isNotFound(err)) {
+      return null;
+    }
+    throw err;
+  }
+}
+
+/**
+ * Finds the Swell order a ShipStation shipment belongs to, in this environment only.
+ *
+ * The order key decides it. A key another Swell environment made (`test:<id>` seen from
+ * live, or a bare id seen from test) is never this environment's order, whatever its
+ * number says. Matching on the order number alone is only trusted when ShipStation's own
+ * order id agrees with the one recorded when this app pushed the order: one ShipStation
+ * account often holds orders from several channels, and test and live number their
+ * orders independently, so the same number can easily belong to someone else.
+ */
 async function resolveOrder(
   req: SwellRequest,
   settings: ShipStationSettings,
   shipment: ShipStationShipment,
+  env: SwellEnvironment,
 ): Promise<Record<string, any> | null> {
-  const key = str(shipment.orderKey);
-  if (key && /^[0-9a-f]{24}$/i.test(key)) {
-    const order = await req.swell.get('/orders/{id}', {
-      id: key,
-      expand: ORDER_EXPAND,
-    });
+  const key = parseOrderKey(shipment.orderKey);
+  if (key) {
+    if (key.environment.toLowerCase() !== environmentName(env).toLowerCase()) {
+      return null;
+    }
+    const order = await getOrder(req, key.orderId);
     if (order) {
-      return order as Record<string, any>;
+      return order;
     }
   }
 
   const number = str(shipment.orderNumber);
-  if (number) {
+  const shipstationOrderId = Number(shipment.orderId);
+  if (number && shipment.orderId != null && Number.isFinite(shipstationOrderId)) {
     // `number` is the orders model's secondary lookup field, so it resolves by path.
-    const order = await req.swell.get('/orders/{id}', {
-      id: stripOrderPrefix(number, settings.order_prefix),
-      expand: ORDER_EXPAND,
-    });
-    if (order) {
-      return order as Record<string, any>;
+    const order = await getOrder(req, stripOrderPrefix(number, settings.order_prefix));
+    if (order && Number(readSyncState(req, order).shipstation_order_id) === shipstationOrderId) {
+      return order;
     }
   }
 
@@ -307,17 +351,18 @@ async function ingestOne(
   settings: ShipStationSettings,
   shipment: ShipStationShipment,
   contexts: Map<string, OrderContext>,
+  env: SwellEnvironment,
 ): Promise<IngestDetail> {
   const shipmentId = Number.isFinite(Number(shipment.shipmentId))
     ? Number(shipment.shipmentId)
     : null;
 
-  const order = await resolveOrder(req, settings, shipment);
+  const order = await resolveOrder(req, settings, shipment, env);
   if (!order) {
     return {
       shipmentId,
-      action: 'no_order',
-      message: `No Swell order matches orderKey "${shipment.orderKey ?? ''}" or orderNumber "${shipment.orderNumber ?? ''}".`,
+      action: 'unmatched',
+      message: `No order in this Swell environment matches orderKey "${shipment.orderKey ?? ''}" / orderNumber "${shipment.orderNumber ?? ''}"; it belongs to another sales channel or environment.`,
     };
   }
 
@@ -451,9 +496,11 @@ export async function ingestShipments(
     canceled: 0,
     duplicates: 0,
     skipped: 0,
+    unmatched: 0,
     failed: 0,
     details: [],
   };
+  const env = swellEnvironment(req);
 
   const batch = shipments.slice(0, MAX_SHIPMENTS_PER_DELIVERY);
   if (shipments.length > batch.length) {
@@ -467,7 +514,7 @@ export async function ingestShipments(
   for (const shipment of batch) {
     let detail: IngestDetail;
     try {
-      detail = await ingestOne(req, settings, shipment, contexts);
+      detail = await ingestOne(req, settings, shipment, contexts, env);
     } catch (err) {
       detail = {
         shipmentId: Number(shipment?.shipmentId) || null,
@@ -489,6 +536,12 @@ export async function ingestShipments(
         break;
       case 'skipped':
         summary.skipped += 1;
+        break;
+      case 'unmatched':
+        // ShipStation notifies about every shipment on the account (or store), so other
+        // channels' labels land here too. Not ours to record, and not worth a retry.
+        summary.unmatched += 1;
+        console.log(`ShipStation: ignored shipment ${detail.shipmentId ?? '(no id)'}: ${detail.message}`);
         break;
       default:
         summary.failed += 1;

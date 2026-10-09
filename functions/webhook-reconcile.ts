@@ -1,4 +1,6 @@
+import { environmentName, swellEnvironment } from './lib/environment';
 import { getSettings, hasCredentials } from './lib/settings';
+import { ENVIRONMENT_UNKNOWN } from './lib/webhooks';
 import { reconcileWebhooks, removeWebhooks } from './lib/webhooks';
 
 export const config: SwellConfig = {
@@ -14,6 +16,14 @@ export const config: SwellConfig = {
  * callback URL after the webhook secret is rotated.
  */
 export default async function (req: SwellRequest) {
+  // Live and test can share a ShipStation account. Only ever touch this environment's
+  // own subscriptions, and touch none when the environment cannot be told.
+  const env = swellEnvironment(req);
+  if (!env.known) {
+    console.warn(`ShipStation: ${ENVIRONMENT_UNKNOWN}`);
+    return;
+  }
+
   const settings = await getSettings(req);
 
   // Switched off: take the subscriptions down, as the native integration does when it is
@@ -23,7 +33,7 @@ export default async function (req: SwellRequest) {
     const count = removed.outcomes.filter((outcome) => outcome.action === 'removed').length;
     if (count > 0 || !removed.ok) {
       console.log(
-        `ShipStation: app is switched off; removed ${count} webhook subscription(s)` +
+        `ShipStation: app is switched off in ${environmentName(env)}; removed ${count} webhook subscription(s)` +
           (removed.ok ? '.' : ', some could not be removed.'),
       );
     }
@@ -38,6 +48,9 @@ export default async function (req: SwellRequest) {
   }
 
   const result = await reconcileWebhooks(req, settings);
+  if (result.message) {
+    console.log(`ShipStation: ${result.message}`);
+  }
 
   for (const outcome of result.outcomes) {
     const line = `ShipStation webhook ${outcome.event}: ${outcome.action}${

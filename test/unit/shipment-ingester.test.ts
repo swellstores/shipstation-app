@@ -232,7 +232,8 @@ describe('ingestShipments', () => {
     );
   });
 
-  it('reports a shipment whose order cannot be found instead of failing the delivery', async () => {
+  it('acknowledges a shipment whose order is not in this store instead of failing', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
     const swell = swellStub({ orders: undefined });
     const req = createMockRequest({ swell });
 
@@ -240,9 +241,88 @@ describe('ingestShipments', () => {
       shipStationShipment() as ShipStationShipment,
     ]);
 
-    expect(summary.failed).toBe(1);
-    expect(summary.details[0]).toMatchObject({ action: 'no_order' });
+    expect(summary).toMatchObject({ unmatched: 1, failed: 0 });
+    expect(summary.details[0]).toMatchObject({ action: 'unmatched' });
     expect(swell.post).not.toHaveBeenCalled();
+  });
+
+  it("treats a missing order that the API reports as an error as unmatched, not a failure", async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const swell = swellStub({ orders: order() });
+    swell.get.mockImplementation(async () => {
+      throw Object.assign(new Error('Resource not found'), { status: 400 });
+    });
+    const req = createMockRequest({ swell });
+
+    const summary = await ingestShipments(req, settings, [
+      shipStationShipment() as ShipStationShipment,
+    ]);
+
+    expect(summary).toMatchObject({ unmatched: 1, failed: 0 });
+  });
+
+  it("never matches another channel's order on its number alone", async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    // A Swell order with the same number, but ShipStation's order id is not the one this
+    // app recorded when it pushed it, so the shipment is somebody else's.
+    const sameNumber = order();
+    sameNumber.$app = { shipstation: { order_key: sameNumber.id, shipstation_order_id: 111 } };
+    const swell = swellStub({ orders: sameNumber });
+    const req = createMockRequest({ swell });
+
+    const summary = await ingestShipments(req, settings, [
+      shipStationShipment({ orderKey: 'amazon-123-456', orderId: 999 }) as ShipStationShipment,
+    ]);
+
+    expect(summary).toMatchObject({ unmatched: 1, created: 0 });
+    expect(swell.post).not.toHaveBeenCalled();
+  });
+
+  it('matches on the order number when ShipStation order ids agree', async () => {
+    const pushed = order();
+    pushed.$app = { shipstation: { order_key: pushed.id, shipstation_order_id: 500001 } };
+    const swell = swellStub({ orders: pushed });
+    const req = createMockRequest({ swell });
+
+    const summary = await ingestShipments(req, settings, [
+      shipStationShipment({ orderKey: null, orderId: 500001 }) as ShipStationShipment,
+    ]);
+
+    expect(summary.created).toBe(1);
+  });
+
+  it("never attaches a test environment's shipment to a live order", async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    // Live and test share a ShipStation account; the label for a test order reaches the
+    // live webhook. Its key says test, so the live order with the same number is left be.
+    const liveOrder = order();
+    const swell = swellStub({ orders: liveOrder });
+    const req = createMockRequest({ swell });
+    req.logParams = { client_id: 'test-store', environment_id: null };
+
+    const summary = await ingestShipments(req, settings, [
+      shipStationShipment({ orderKey: `test:${liveOrder.id}` }) as ShipStationShipment,
+    ]);
+
+    expect(summary).toMatchObject({ unmatched: 1, created: 0 });
+    expect(swell.get).not.toHaveBeenCalledWith('/orders/{id}', expect.anything());
+  });
+
+  it("does not record a live order's shipment in the test environment", async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const swell = swellStub({ orders: order() });
+    const req = createMockRequest({ swell });
+    req.logParams = { client_id: 'test-store', environment_id: 'test' };
+
+    const live = await ingestShipments(req, settings, [
+      shipStationShipment() as ShipStationShipment,
+    ]);
+    expect(live).toMatchObject({ unmatched: 1, created: 0 });
+
+    const own = await ingestShipments(req, settings, [
+      shipStationShipment({ orderKey: 'test:6650f1a2b3c4d5e6f7a8b9c0' }) as ShipStationShipment,
+    ]);
+    expect(own.created).toBe(1);
   });
 
   it('records two partial shipments against different line items', async () => {

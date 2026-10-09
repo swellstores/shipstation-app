@@ -14,6 +14,8 @@ export interface MapOrderOptions {
   weightUnit?: string;
   /** Forces an order status, used by the cancellation path. */
   status?: ShipStationOrderStatus;
+  /** Defaults to the Swell order id; see `orderKeyFor` in `environment.ts`. */
+  orderKey?: string;
 }
 
 function joinName(first: unknown, last: unknown): string {
@@ -178,8 +180,9 @@ function itemOptions(item: Record<string, any>): Array<{ name: string; value: st
 }
 
 /**
- * Builds the `/orders/createorder` payload. `orderKey` is the Swell order id, which makes
- * every push an idempotent upsert of the same ShipStation order.
+ * Builds the `/orders/createorder` payload. `orderKey` is the Swell order id (prefixed
+ * with the environment outside live), which makes every push an idempotent upsert of the
+ * same ShipStation order.
  */
 export function mapOrder(
   order: Record<string, any>,
@@ -196,9 +199,10 @@ export function mapOrder(
     );
   }
 
+  const orderKey = options.orderKey ?? String(order.id);
   const payload: ShipStationOrder = {
     orderNumber: `${options.orderPrefix ?? ''}${order.number ?? order.id}`,
-    orderKey: String(order.id),
+    orderKey,
     orderDate: str(order.date_created) ?? new Date().toISOString(),
     orderStatus: resolveStatus(order, options.status),
     billTo,
@@ -207,7 +211,8 @@ export function mapOrder(
     advancedOptions: {
       source: 'Swell',
       // Visible and searchable in the ShipStation UI, unlike orderKey.
-      customField1: `swell:${order.id}`,
+      // Carries the environment outside live (`swell:test:<id>`).
+      customField1: `swell:${orderKey}`,
     },
   };
 

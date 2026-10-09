@@ -4,6 +4,7 @@ import {
   hasCredentials,
   webhookCallbackUrl,
 } from './lib/settings';
+import { environmentName, swellEnvironment } from './lib/environment';
 import { ShipStationClient, errorText } from './lib/shipstation';
 import { describeWebhooks, reconcileWebhooks, removeWebhooks } from './lib/webhooks';
 
@@ -23,8 +24,10 @@ async function report(req: SwellRequest, register: boolean) {
   const settings = await getSettings(req);
 
   const callbackUrl = await webhookCallbackUrl(req, settings);
+  const env = swellEnvironment(req);
 
   const result: Record<string, unknown> = {
+    environment: env.known ? environmentName(env) : 'unknown',
     enabled: settings.enabled,
     push_trigger: settings.push_trigger,
     credentials_set: hasCredentials(settings),
@@ -86,9 +89,11 @@ async function report(req: SwellRequest, register: boolean) {
     ...result,
     webhooks_ok: reconciled.ok,
     webhooks: reconciled.outcomes,
-    message: reconciled.ok
-      ? 'ShipStation webhooks are registered. Remember to disable the native ShipStation integration so orders are not pushed twice.'
-      : 'Some webhook subscriptions could not be registered — see webhooks for details.',
+    message: reconciled.message
+      ? reconciled.message
+      : reconciled.ok
+        ? 'ShipStation webhooks are registered. Remember to disable the native ShipStation integration so orders are not pushed twice.'
+        : 'Some webhook subscriptions could not be registered — see webhooks for details.',
   };
 }
 

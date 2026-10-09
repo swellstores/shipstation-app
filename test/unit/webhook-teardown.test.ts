@@ -38,7 +38,11 @@ function deletedIds(fetchMock: ReturnType<typeof stubShipStation>): string[] {
     .map(([url]) => String(url).split('/').pop() ?? '');
 }
 
-function request(settings: Record<string, unknown>, body: Record<string, unknown> = {}) {
+function request(
+  settings: Record<string, unknown>,
+  body: Record<string, unknown> = {},
+  environmentId: string | null = null,
+) {
   const req = createMockRequest({
     store: { id: STORE } as any,
     swell: {
@@ -49,6 +53,8 @@ function request(settings: Record<string, unknown>, body: Record<string, unknown
     },
   });
   req.body = body;
+  // What the platform sends in Swell-Request-Log; environment_id is empty in live.
+  req.logParams = { client_id: STORE, environment_id: environmentId };
   return req;
 }
 

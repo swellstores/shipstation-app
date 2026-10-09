@@ -1,3 +1,4 @@
+import { orderKeyFor, swellEnvironment } from './environment';
 import { mapOrder, shippableItems } from './order-mapper';
 import { ShipStationSettings, hasCredentials } from './settings';
 import {
@@ -68,6 +69,7 @@ export async function loadOrder(
 async function remoteStatus(
   client: ShipStationClient,
   state: SyncState,
+  orderKey: string,
 ): Promise<string | null> {
   try {
     if (state.shipstation_order_id) {
@@ -75,9 +77,12 @@ async function remoteStatus(
       return order?.orderStatus ?? null;
     }
     if (state.shipstation_order_number) {
+      // Order numbers are not unique in ShipStation (other channels, other environments),
+      // so only an order with this order's key counts.
       const order = await client.findOrderByNumber(
         state.shipstation_order_number,
         PROBE_TIMEOUT_MS,
+        orderKey,
       );
       return order?.orderStatus ?? null;
     }
@@ -126,9 +131,10 @@ export async function pushOrder(
   }
 
   const client = new ShipStationClient(settings.api_key, settings.api_secret);
+  const orderKey = orderKeyFor(swellEnvironment(req), String(order.id));
 
   if (options.guardShipped) {
-    const status = await remoteStatus(client, state);
+    const status = await remoteStatus(client, state, orderKey);
     if (status && SHIPSTATION_FINAL_STATUSES.includes(status)) {
       const alreadyCancelled = status === 'cancelled' && options.statusOverride === 'cancelled';
       await recordSyncState(req, orderId, {
@@ -158,6 +164,7 @@ export async function pushOrder(
       storeId: settings.store_id,
       weightUnit: needsWeightUnit ? await getWeightUnit(req) : undefined,
       status: options.statusOverride,
+      orderKey,
     });
   } catch (err) {
     const message = errorText(err);
