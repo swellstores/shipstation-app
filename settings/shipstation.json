@@ -2,6 +2,15 @@
   "$schema": "https://json.swell.store/setting.json",
   "label": "ShipStation",
   "description": "Two-way order and shipment sync with ShipStation. Disable the native ShipStation integration before enabling this app, otherwise every order is pushed twice.",
+  "actions": [
+    {
+      "id": "test_connection",
+      "label": "Test connection",
+      "function": "test-connection",
+      "loading_label": "Testing…",
+      "hint": "Checks the API key and secret, and the store ID if set"
+    }
+  ],
   "fields": [
     {
       "id": "enabled",

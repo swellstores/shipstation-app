@@ -72,7 +72,7 @@ export function createMockRequest(options: MockRequestOptions = {}): SwellReques
   const req: Partial<SwellRequest> & { appId: string; storeId: string } = {
     originalRequest,
     context,
-    url,
+    url: new URL(url),
     method,
     headers: requestHeaders,
     referrer: originalRequest.referrer,
