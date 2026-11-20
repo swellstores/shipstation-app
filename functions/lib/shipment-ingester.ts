@@ -463,6 +463,21 @@ function restoreQuantities(context: OrderContext, shipment: Record<string, any>)
   }
 }
 
+/**
+ * Swell's "Cannot ship …" reason when `$validate_items` refused the items: a 4xx whose body
+ * carries `errors.items.message`. Any other error is returned as undefined.
+ */
+export function itemsRefusal(err: unknown): string | undefined {
+  const status = Number((err as { status?: unknown })?.status);
+  if (!(status >= 400 && status < 500)) {
+    return undefined;
+  }
+  const body = (err as { body?: any })?.body;
+  const errors = body?.errors ?? body;
+  const message = errors?.items?.message;
+  return typeof message === 'string' && /^Cannot ship /.test(message) ? message : undefined;
+}
+
 /** Swell errors carry the HTTP status; 4xx means the same request would fail again. */
 function isTransient(err: unknown): boolean {
   const status = Number((err as { status?: unknown })?.status);
@@ -578,7 +593,31 @@ async function ingestOne(
     body.tracking_code = tracking;
   }
 
-  const created = (await req.swell.post('/shipments', body)) as Record<string, any>;
+  // Swell refuses items the order has nothing left to deliver for, so two deliveries of the
+  // same label, or a label ShipStation sent while another channel shipped the order, can't
+  // ship units twice. The check is opt-in (platform ticket 1219752903732699).
+  body.$validate_items = true;
+
+  let created: Record<string, any>;
+  try {
+    created = (await req.swell.post('/shipments', body)) as Record<string, any>;
+  } catch (err) {
+    const refused = itemsRefusal(err);
+    if (!refused) {
+      throw err;
+    }
+    // Everything in this shipment was already delivered by a shipment Swell knows about,
+    // so there is nothing left to record and a retry would be refused the same way.
+    console.warn(
+      `ShipStation: Swell refused shipment ${shipmentId ?? '(no id)'} on order ${order.number}: ${refused}`,
+    );
+    return {
+      shipmentId,
+      action: 'skipped',
+      orderId: order.id,
+      message: refused,
+    };
+  }
 
   // Without the dedupe key a redelivery would create a second shipment, so make sure it
   // actually persisted rather than assuming create-time $app writes are supported.

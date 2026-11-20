@@ -195,6 +195,28 @@ describe('ingestShipments', () => {
       country: 'US',
     });
     expect(body.$app.shipstation.shipment_id).toBe(900001);
+    expect(body.$validate_items).toBe(true);
+  });
+
+  it('skips, without a retry, a shipment whose items Swell says are already delivered', async () => {
+    const swell = swellStub({ orders: order() });
+    swell.post.mockRejectedValueOnce(
+      Object.assign(new Error('Validation error'), {
+        status: 400,
+        body: { errors: { items: { message: 'Cannot ship 2 of item item_1, only 0 left to deliver' } } },
+      }),
+    );
+    const req = createMockRequest({ swell });
+
+    const summary = await ingestShipments(req, settings, [
+      shipStationShipment() as ShipStationShipment,
+    ]);
+
+    expect(summary).toMatchObject({ created: 0, skipped: 1, failed: 0, retry: false });
+    expect(summary.details[0]).toMatchObject({
+      action: 'skipped',
+      message: 'Cannot ship 2 of item item_1, only 0 left to deliver',
+    });
   });
 
   it('skips a shipment that Swell already recorded', async () => {
