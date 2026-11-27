@@ -321,3 +321,7 @@ Things worth knowing before changing the code:
 Issues and pull requests are welcome. For questions, visit the
 [Swell Discord](https://discord.gg/VakSbyjDGZ) or
 [GitHub discussions](https://github.com/orgs/swellstores/discussions/).
+
+## License
+
+MIT. See [LICENSE](LICENSE). Contributions are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md).
