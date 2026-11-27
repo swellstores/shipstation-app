@@ -52,16 +52,18 @@ prefix.
 
 **What it does.** After the app is set up, orders that are already paid and still have items
 to ship are sent too, five a minute, oldest first, until none are left. It starts when
-**Test connection** succeeds, or at the daily check if you never run it. It's the same set the
-built-in integration sends on its first sync, so a store switching over doesn't start with an
-empty ShipStation. It then stops, and every order it touched is marked with a sync status.
-Running **Test connection** again sends any that are still unsent. Turn it off with **Send
-existing orders**. It also does nothing while **Push orders to ShipStation** is set to only on
-request.
+**Test connection** succeeds. It's the same set the built-in integration sends on its first
+sync, so a store switching over doesn't start with an empty ShipStation. It then stops, and
+every order it touched is marked with a sync status. Once a day the app also checks for paid
+orders that are still waiting to ship and not in ShipStation, for example ones paid while
+**Enable ShipStation sync** was off, or after setup if you never ran **Test connection**, and
+sends them the same way. Turn it off with **Send existing orders**. It also does nothing while
+**Push orders to ShipStation** is set to only on request.
 
 **How it's built.** `functions/order-backfill.ts` sends one batch of a `backfills` run and
-schedules the next a minute later. Test connection starts a run, and the daily
-`webhook-reconcile` starts the first one and restarts a run whose batch was lost.
+schedules the next a minute later. Test connection starts a run. The daily
+`webhook-reconcile` starts one when a single limited query finds an unsent paid open order,
+and restarts a run whose batch was lost. Neither starts a run while one is pending.
 
 ### Order edits and cancellations
 

@@ -155,10 +155,16 @@ describe('order-backfill', () => {
 });
 
 describe('starting and re-arming existing-order syncs', () => {
-  function store(jobs: Array<Record<string, any>>, settings: Record<string, unknown> = {}) {
-    const get = vi.fn(async (_url: string, query: Record<string, any> = {}) => ({
-      results: jobs.filter((job) => !query.where?.status || job.status === query.where.status),
-    }));
+  function store(
+    jobs: Array<Record<string, any>>,
+    settings: Record<string, unknown> = {},
+    unsentOrders: string[] = [],
+  ) {
+    const get = vi.fn(async (url: string, query: Record<string, any> = {}) =>
+      url === '/orders'
+        ? { results: unsentOrders.slice(0, query.limit).map((id) => ({ id })) }
+        : { results: jobs.filter((job) => !query.where?.status || job.status === query.where.status) },
+    );
     const post = vi.fn(async (_url: string, data: Record<string, any>) => data);
     const put = vi.fn(async (_url: string, data: Record<string, any>) => data);
     const req = createMockRequest({
@@ -184,13 +190,32 @@ describe('starting and re-arming existing-order syncs', () => {
     expect(post).not.toHaveBeenCalled();
   });
 
-  it('starts again on request once the last run finished, but not as a first run', async () => {
+  it('starts again on request once the last run finished', async () => {
+    const { req } = store([{ id: 'a', status: 'done' }]);
+    await expect(startBackfill(req, await getSettings(req))).resolves.toBe(true);
+  });
+
+  it('with onlyIfUnsent, starts only when a paid open order is still unsent, in one limited query', async () => {
     const done = [{ id: 'a', status: 'done' }];
-    const again = store(done);
-    await expect(startBackfill(again.req, await getSettings(again.req))).resolves.toBe(true);
-    const first = store(done);
-    await expect(startBackfill(first.req, await getSettings(first.req), { firstOnly: true })).resolves.toBe(false);
-    expect(first.post).not.toHaveBeenCalled();
+    const none = store(done, {}, []);
+    await expect(startBackfill(none.req, await getSettings(none.req), { onlyIfUnsent: true })).resolves.toBe(false);
+    expect(none.post).not.toHaveBeenCalled();
+
+    const some = store(done, {}, ['order_a', 'order_b']);
+    await expect(startBackfill(some.req, await getSettings(some.req), { onlyIfUnsent: true })).resolves.toBe(true);
+    const orderQueries = some.get.mock.calls.filter(([url]) => url === '/orders');
+    expect(orderQueries).toHaveLength(1);
+    expect(orderQueries[0][1]).toMatchObject({
+      limit: 1,
+      where: { paid: true, '$app.shipstation.sync_status': { $exists: false } },
+    });
+  });
+
+  it('with onlyIfUnsent, still starts nothing while a run is pending, without querying orders', async () => {
+    const { req, get, post } = store([{ id: 'a', status: 'pending' }], {}, ['order_a']);
+    await expect(startBackfill(req, await getSettings(req), { onlyIfUnsent: true })).resolves.toBe(false);
+    expect(get.mock.calls.some(([url]) => url === '/orders')).toBe(false);
+    expect(post).not.toHaveBeenCalled();
   });
 
   it('starts nothing when existing orders are not sent automatically', async () => {

@@ -24,26 +24,53 @@ export function backfillOff(settings: ShipStationSettings): string | null {
 }
 
 /**
+ * The orders a run sends: native's first-sync set (paid, not canceled or closed, items
+ * still to ship) that this app hasn't synced yet. The `$app` filter is a collection scan
+ * (the platform has no custom indexes); the others narrow it to open paid orders.
+ */
+export function unsentOrdersWhere(req: SwellRequest): Record<string, unknown> {
+  return {
+    paid: true,
+    canceled: { $ne: true },
+    closed: { $ne: true },
+    item_quantity_deliverable: { $gt: 0 },
+    [`$app.${appId(req)}.sync_status`]: { $exists: false },
+  };
+}
+
+/**
  * Starts sending the orders that are open but not yet in ShipStation, unless a run is
- * already pending. With `firstOnly`, starts one only when none has ever run. Returns
- * whether a run was started.
+ * already pending. With `onlyIfUnsent`, starts one only when at least one such order
+ * exists, which is how the daily check catches up on orders paid while the app was off.
+ * Returns whether a run was started.
  */
 export async function startBackfill(
   req: SwellRequest,
   settings: ShipStationSettings,
-  { firstOnly = false }: { firstOnly?: boolean } = {},
+  { onlyIfUnsent = false }: { onlyIfUnsent?: boolean } = {},
 ): Promise<boolean> {
   if (backfillOff(settings)) {
     return false;
   }
 
-  const existing = (await req.swell.get(backfillsPath(req), {
-    where: firstOnly ? {} : { status: 'pending' },
+  const pending = (await req.swell.get(backfillsPath(req), {
+    where: { status: 'pending' },
     limit: 1,
     fields: 'id',
   } as any)) as { results?: unknown[] } | null;
-  if (existing?.results?.length) {
+  if (pending?.results?.length) {
     return false;
+  }
+
+  if (onlyIfUnsent) {
+    const unsent = (await req.swell.get('/orders', {
+      where: unsentOrdersWhere(req),
+      limit: 1,
+      fields: 'id',
+    } as any)) as { results?: unknown[] } | null;
+    if (!unsent?.results?.length) {
+      return false;
+    }
   }
 
   // Due now: the first batch runs right away

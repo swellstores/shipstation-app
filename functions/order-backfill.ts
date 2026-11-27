@@ -1,6 +1,6 @@
-import { BACKFILL_INTERVAL_MS, backfillOff, backfillsPath } from './lib/backfill';
+import { BACKFILL_INTERVAL_MS, backfillOff, backfillsPath, unsentOrdersWhere } from './lib/backfill';
 import { pushOrder, PushResult } from './lib/push';
-import { appId, getSettings } from './lib/settings';
+import { getSettings } from './lib/settings';
 
 export const config: SwellConfig = {
   description: 'Push existing open orders to ShipStation after setup, a batch at a time',
@@ -32,7 +32,7 @@ export const TIME_BUDGET_MS = 5000;
  * order placed before the switch has to be pushed by hand.
  *
  * Each batch belongs to a backfill run (`backfills`), which Test connection starts, and the
- * daily webhook-reconcile starts the first time the app is configured. "Not yet synced" is
+ * daily webhook-reconcile starts whenever paid open orders are still unsent. "Not yet synced" is
  * an order with no `sync_status` from this app, and every push records one (synced,
  * skipped or error), so each batch picks up where the last stopped, an order is never
  * pushed twice, and the run finishes once nothing is left. Orders that failed are left to
@@ -72,13 +72,7 @@ export default async function (req: SwellRequest) {
 
   const started = Date.now();
   const response = (await req.swell.get('/orders', {
-    where: {
-      paid: true,
-      canceled: { $ne: true },
-      closed: { $ne: true },
-      item_quantity_deliverable: { $gt: 0 },
-      [`$app.${appId(req)}.sync_status`]: { $exists: false },
-    },
+    where: unsentOrdersWhere(req),
     sort: 'date_created asc',
     limit: BATCH_SIZE,
     fields: 'id',

@@ -28,12 +28,13 @@ export default async function (req: SwellRequest) {
 
   const settings = await getSettings(req);
 
-  // Existing open orders: start the first run once the app is configured, for merchants
-  // who never ran Test connection, and pick up a run whose scheduled batch was lost.
+  // Existing open orders: once a day, start a run when paid open orders are still unsent
+  // (the first after setup for merchants who never ran Test connection, or ones paid while
+  // the app was off), and pick up a run whose scheduled batch was lost.
   try {
     await rearmBackfills(req);
-    if (await startBackfill(req, settings, { firstOnly: true })) {
-      console.log('ShipStation: started sending existing open orders.');
+    if (await startBackfill(req, settings, { onlyIfUnsent: true })) {
+      console.log('ShipStation: started sending open orders that are not in ShipStation yet.');
     }
   } catch (err) {
     console.error(`ShipStation: couldn't check the existing-order sync: ${errorText(err)}`);

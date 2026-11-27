@@ -214,16 +214,27 @@ describe('webhooks shared by live and test on one ShipStation account', () => {
 });
 
 describe('existing-order sync from the daily reconcile', () => {
-  it('starts the first run once the app is configured, and only the first', async () => {
+  it('starts a run when paid open orders are still unsent, such as ones paid while it was off', async () => {
     stubShipStation();
     vi.spyOn(console, 'log').mockImplementation(() => {});
 
-    for (const [jobs, started] of [[[], true], [[{ id: 'old', status: 'done' }], false]] as const) {
+    const done = [{ id: 'old', status: 'done' }];
+    const cases = [
+      [[], ['order_a'], true],
+      [done, ['order_a'], true],
+      [done, [], false],
+      [[{ id: 'now', status: 'pending', date_next_run: new Date().toISOString() }], ['order_a'], false],
+    ] as const;
+    for (const [jobs, unsent, started] of cases) {
       const req = request(null);
       const functions = await req.swell.get('/:functions');
       const post = vi.fn(async (_url: string, data: Record<string, any>) => data);
-      req.swell.get = vi.fn(async (url: string) =>
-        String(url).endsWith('/backfills') ? { results: jobs } : functions,
+      req.swell.get = vi.fn(async (url: string, query: Record<string, any> = {}) =>
+        String(url).endsWith('/backfills')
+          ? { results: jobs.filter((job) => !query.where?.status || job.status === query.where.status) }
+          : url === '/orders'
+            ? { results: unsent.map((id) => ({ id })) }
+            : functions,
       ) as any;
       req.swell.post = post as any;
       req.swell.put = vi.fn(async () => ({})) as any;
