@@ -3,7 +3,7 @@
 	"id": "shipstation",
 	"name": "ShipStation",
 	"type": "integration",
-	"version": "1.0.7",
+	"version": "1.0.8",
 	"permissions": [],
 	"integrations": [
 		"shipstation"
