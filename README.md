@@ -13,7 +13,7 @@ visible sync status on every order.
 | | Built-in integration | This app |
 | --- | --- | --- |
 | When orders are sent | When paid | When paid, when submitted, or only on request |
-| Orders open at setup | Sent on first sync | Sent after setup, a few every five minutes |
+| Orders open at setup | Sent on first sync | Sent after setup, five a minute |
 | Order changes | Never re-sent | Address and item edits, payments and holds re-sent |
 | Cancellations | Not sent | Order marked cancelled in ShipStation |
 | Partial shipments | One shipment per label | One Swell shipment per ShipStation shipment, with per-item quantities |
@@ -51,13 +51,17 @@ prefix.
 ### Orders that were already open at setup
 
 **What it does.** After the app is set up, orders that are already paid and still have items
-to ship are sent too, five at a time every five minutes, oldest first, until none are left.
-It's the same set the built-in integration sends on its first sync, so a store switching over
-doesn't start with an empty ShipStation. It then stays idle, because every order it touches
-is marked with a sync status. Turn it off with **Send existing orders**. It also does nothing
-while **Push orders to ShipStation** is set to only on request.
+to ship are sent too, five a minute, oldest first, until none are left. It starts when
+**Test connection** succeeds, or at the daily check if you never run it. It's the same set the
+built-in integration sends on its first sync, so a store switching over doesn't start with an
+empty ShipStation. It then stops, and every order it touched is marked with a sync status.
+Running **Test connection** again sends any that are still unsent. Turn it off with **Send
+existing orders**. It also does nothing while **Push orders to ShipStation** is set to only on
+request.
 
-**How it's built.** `functions/order-backfill.ts`, a cron every five minutes.
+**How it's built.** `functions/order-backfill.ts` sends one batch of a `backfills` run and
+schedules the next a minute later. Test connection starts a run, and the daily
+`webhook-reconcile` starts the first one and restarts a run whose batch was lost.
 
 ### Order edits and cancellations
 
@@ -232,8 +236,8 @@ secret** from ShipStation → **Settings → Account → API Settings**.
 - **ShipStation won't change shipped or cancelled orders.** Edits after that point are
   recorded as Skipped.
 - **Rate limits.** ShipStation allows about 40 API requests a minute. Short pauses are waited
-  out; longer ones are retried later. Sending existing orders is paced at five every five
-  minutes to stay well inside that.
+  out; longer ones are retried later. Sending existing orders is paced at five a minute to
+  stay well inside that.
 - **Existing orders are found by scanning.** The first sync looks for paid, unshipped orders
   the app hasn't seen. On stores with a very large number of open orders it takes a while to
   catch up.

@@ -1,5 +1,6 @@
+import { startBackfill } from './lib/backfill';
 import { ShipStationClient, ShipStationError, errorText } from './lib/shipstation';
-import { getSettings } from './lib/settings';
+import { getSettings, ShipStationSettings } from './lib/settings';
 
 export const config: SwellConfig = {
   description: 'Check the ShipStation API key and secret',
@@ -50,12 +51,29 @@ export default async function (req: SwellRequest) {
         }.`,
       );
     }
-    return { message: `Connected to ShipStation store ${name(store)}.` };
+    return { message: await withBackfill(req, settings, `Connected to ShipStation store ${name(store)}.`) };
   }
 
   return {
-    message: stores.length
-      ? `Connected to ShipStation. Stores in this account: ${stores.map(name).join(', ')}.`
-      : 'Connected to ShipStation.',
+    message: await withBackfill(
+      req,
+      settings,
+      stores.length
+        ? `Connected to ShipStation. Stores in this account: ${stores.map(name).join(', ')}.`
+        : 'Connected to ShipStation.',
+    ),
   };
+}
+
+// A working connection is the app's "set up" moment, so it starts sending the orders that
+// were already open (when that setting is on). That doesn't fail the test if it can't start.
+async function withBackfill(req: SwellRequest, settings: ShipStationSettings, message: string) {
+  try {
+    if (await startBackfill(req, settings)) {
+      return `${message} Existing open orders are being sent to ShipStation.`;
+    }
+  } catch (err) {
+    console.error(`ShipStation: couldn't start sending existing orders: ${errorText(err)}`);
+  }
+  return message;
 }

@@ -1,0 +1,44 @@
+{
+  "description": "A run that sends the orders already open when the app was set up. It works in batches on a schedule and finishes when no unsent open order is left.",
+  "label": "Existing-order sync",
+  "plural": "Existing-order syncs",
+  "fields": {
+    "status": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "done"
+      ],
+      "default": "pending"
+    },
+    "date_next_run": {
+      "type": "date",
+      "description": "When the next batch runs. Cleared when the run is done"
+    },
+    "pushed_count": {
+      "type": "int",
+      "default": 0
+    },
+    "attempted_count": {
+      "type": "int",
+      "default": 0
+    },
+    "result": {
+      "type": "string",
+      "description": "Why the run finished"
+    },
+    "date_completed": {
+      "type": "date"
+    }
+  },
+  "events": {
+    "types": [
+      {
+        "id": "created"
+      },
+      {
+        "id": "updated"
+      }
+    ]
+  }
+}

@@ -212,3 +212,25 @@ describe('webhooks shared by live and test on one ShipStation account', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
+
+describe('existing-order sync from the daily reconcile', () => {
+  it('starts the first run once the app is configured, and only the first', async () => {
+    stubShipStation();
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    for (const [jobs, started] of [[[], true], [[{ id: 'old', status: 'done' }], false]] as const) {
+      const req = request(null);
+      const functions = await req.swell.get('/:functions');
+      const post = vi.fn(async (_url: string, data: Record<string, any>) => data);
+      req.swell.get = vi.fn(async (url: string) =>
+        String(url).endsWith('/backfills') ? { results: jobs } : functions,
+      ) as any;
+      req.swell.post = post as any;
+      req.swell.put = vi.fn(async () => ({})) as any;
+
+      await reconcile(req);
+
+      expect(post.mock.calls.some(([url]) => String(url).endsWith('/backfills'))).toBe(started);
+    }
+  });
+});

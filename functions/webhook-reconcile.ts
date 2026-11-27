@@ -1,4 +1,6 @@
+import { rearmBackfills, startBackfill } from './lib/backfill';
 import { environmentName, swellEnvironment } from './lib/environment';
+import { errorText } from './lib/shipstation';
 import { getSettings, hasCredentials } from './lib/settings';
 import { ENVIRONMENT_UNKNOWN } from './lib/webhooks';
 import { reconcileWebhooks, removeWebhooks } from './lib/webhooks';
@@ -25,6 +27,17 @@ export default async function (req: SwellRequest) {
   }
 
   const settings = await getSettings(req);
+
+  // Existing open orders: start the first run once the app is configured, for merchants
+  // who never ran Test connection, and pick up a run whose scheduled batch was lost.
+  try {
+    await rearmBackfills(req);
+    if (await startBackfill(req, settings, { firstOnly: true })) {
+      console.log('ShipStation: started sending existing open orders.');
+    }
+  } catch (err) {
+    console.error(`ShipStation: couldn't check the existing-order sync: ${errorText(err)}`);
+  }
 
   // Switched off: take the subscriptions down, as the native integration does when it is
   // deactivated, so ShipStation stops posting to a route that will ignore it.
