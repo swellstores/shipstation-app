@@ -9,6 +9,8 @@ export const config: SwellConfig = {
   description: 'Ensure ShipStation shipment webhooks stay registered',
   cron: {
     schedule: '0 6 * * *',
+    // Not while the app has no credentials: there is nothing to register or remove
+    conditions: { $settings: { shipstation: { api_key: { $empty: false } } } },
   },
 };
 
